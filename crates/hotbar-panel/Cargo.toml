@@ -1,0 +1,27 @@
+[package]
+name = "hotbar-panel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+hotbar-common = { path = "../hotbar-common" }
+hotbar-daemon = { path = "../hotbar-daemon" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+wgpu = "24"
+egui = "0.31"
+egui-wgpu = "0.31"
+smithay-client-toolkit = { version = "0.19", features = ["calloop"] }
+wayland-client = "0.31"
+wayland-backend = "0.3"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+raw-window-handle = "0.6"
+xkbcommon = { version = "0.8", features = ["wayland"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }

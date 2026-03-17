@@ -1,0 +1,264 @@
+// Hotbar — File history timeline panel
+// Matches bartender's Lumon theme
+
+@use "sass:string";
+
+@function gtkalpha($c, $a) {
+  @return string.unquote("alpha(#{$c},#{$a})");
+}
+
+$background: #0d1a1f;
+$foreground: #6ef3ed;
+$accent: #5dd9d3;
+$dim: rgba(#6ef3ed, 0.4);
+$claude-purple: #b388ff;
+$codex-green: #10a37f;
+$user-green: #69f0ae;
+$system-amber: #ffd166;
+$border-color: rgba(#6ef3ed, 0.15);
+
+// Action colors
+$action-opened: #81d4fa;
+$action-modified: #ffcc80;
+$action-created: #a5d6a7;
+$action-deleted: #ef9a9a;
+
+window.hotbar-panel {
+  background: rgba(0, 0, 0, 0);
+  font-family: "Berkeley Mono", monospace;
+  font-size: 13px;
+  color: $foreground;
+
+  .panel-content {
+    background: gtkalpha($background, 0.92);
+    border-radius: 12px;
+    border: 1px solid $border-color;
+    box-shadow: 0 4px 20px gtkalpha(#000, 0.5);
+    min-width: 380px;
+  }
+
+  // Header
+  .panel-header {
+    padding: 12px 16px 8px;
+    border-bottom: 1px solid $border-color;
+  }
+
+  .panel-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: $foreground;
+    text-shadow: 0 0 4px gtkalpha($accent, 0.3);
+  }
+
+  // Filter chips (source)
+  .filter-row {
+    margin-top: 6px;
+  }
+
+  .filter-chip {
+    padding: 2px 10px;
+    margin: 0 2px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: $dim;
+    font-size: 11px;
+    min-height: 0;
+    min-width: 0;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: $foreground;
+    }
+
+    &.active {
+      background: gtkalpha($accent, 0.15);
+      border-color: gtkalpha($accent, 0.4);
+      color: $accent;
+    }
+  }
+
+  // Action filter chips
+  .action-filter-row {
+    margin-top: 4px;
+  }
+
+  .action-chip {
+    padding: 1px 8px;
+    margin: 0 1px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    color: gtkalpha($dim, 0.8);
+    font-size: 10px;
+    min-height: 0;
+    min-width: 0;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.06);
+      color: $foreground;
+    }
+
+    &.active {
+      background: gtkalpha($foreground, 0.1);
+      border-color: gtkalpha($foreground, 0.25);
+      color: $foreground;
+    }
+  }
+
+  // Scroll area
+  .panel-scroll {
+    min-height: 200px;
+  }
+
+  // Scrollbar
+  scrollbar {
+    &.vertical {
+      margin: 4px 2px;
+
+      slider {
+        min-width: 4px;
+        border-radius: 2px;
+        background: gtkalpha($foreground, 0.15);
+
+        &:hover {
+          background: gtkalpha($foreground, 0.25);
+        }
+      }
+    }
+  }
+
+  // File list — right margin so entries don't sit under the scrollbar
+  .file-list {
+    padding: 4px 0;
+    margin-right: 8px;
+  }
+
+  // File entry
+  .file-entry {
+    margin: 0 4px;
+    border-radius: 6px;
+
+    // Left border stripe by source
+    &.source-claude {
+      border-left: 3px solid gtkalpha($claude-purple, 0.6);
+    }
+
+    &.source-codex {
+      border-left: 3px solid gtkalpha($codex-green, 0.6);
+    }
+
+    &.source-user {
+      border-left: 3px solid gtkalpha($user-green, 0.6);
+    }
+
+    &.source-system {
+      border-left: 3px solid gtkalpha($system-amber, 0.6);
+    }
+  }
+
+  .file-button {
+    padding: 8px 10px;
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    min-height: 0;
+
+    &:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+  }
+
+  .copy-button {
+    padding: 4px 6px;
+    margin-right: 4px;
+    background: transparent;
+    border: none;
+    border-radius: 4px;
+    min-height: 0;
+    min-width: 0;
+    opacity: 0.3;
+
+    &:hover {
+      opacity: 1;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    image {
+      min-width: 14px;
+      min-height: 14px;
+      -gtk-icon-style: symbolic;
+      color: $dim;
+    }
+  }
+
+  .file-icon {
+    min-width: 20px;
+    min-height: 20px;
+    margin-right: 10px;
+    -gtk-icon-style: symbolic;
+    color: $dim;
+  }
+
+  .action-icon {
+    min-width: 12px;
+    min-height: 12px;
+    margin-right: 3px;
+    -gtk-icon-style: symbolic;
+    color: $dim;
+  }
+
+  .file-name {
+    font-weight: 600;
+    font-size: 13px;
+    color: $foreground;
+  }
+
+  .file-dir {
+    font-size: 11px;
+    color: $dim;
+    margin-top: 1px;
+  }
+
+  .file-time {
+    font-size: 11px;
+    color: $dim;
+  }
+
+  .source-badge {
+    font-size: 10px;
+    padding: 0 4px;
+    border-radius: 4px;
+    margin-top: 2px;
+
+    &.source-claude {
+      color: $claude-purple;
+      background: gtkalpha($claude-purple, 0.12);
+    }
+
+    &.source-codex {
+      color: $codex-green;
+      background: gtkalpha($codex-green, 0.12);
+    }
+
+    &.source-user {
+      color: $user-green;
+      background: gtkalpha($user-green, 0.12);
+    }
+
+    &.source-system {
+      color: $system-amber;
+      background: gtkalpha($system-amber, 0.12);
+    }
+  }
+
+  // Empty state
+  .empty-state {
+    padding: 40px 20px;
+
+    label {
+      color: $dim;
+      font-size: 13px;
+    }
+  }
+}

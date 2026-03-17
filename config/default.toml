@@ -1,0 +1,16 @@
+[inference]
+backend = "ollama"            # "ollama", "burn", or "none"
+ollama_url = "http://localhost:11434"
+ollama_model = "qwen2.5-coder:7b"
+burn_model_path = ""          # path to ONNX file, empty = disabled
+
+[panel]
+max_files = 200
+refresh_interval_secs = 30
+dir_monitor_cap = 10
+
+[theme]
+name = "hot_wheels"
+
+[keybinds]
+toggle = "super+h"

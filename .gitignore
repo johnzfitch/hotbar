@@ -1,0 +1,57 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo.lock for libraries (keep for binaries)
+# Cargo.lock
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing artifacts
+*.profraw
+*.profdata
+
+# Database files (development)
+*.db
+*.db-shm
+*.db-wal
+
+# Generated files
+flamegraph.svg
+perf.data
+perf.data.old
+
+# OS artifacts
+.Trash-*
+
+# Temporary files
+tmp/
+.tmp/
+*.tmp
+
+# Configuration (may contain secrets)
+config.toml
+*.env
+.env
+
+# Log files
+*.log
+
+# Compiled shaders (if cached)
+*.spv
+
+# Large archive files
+*.zip
+*.tar.gz
+*.tar.zst
+*.7z
+
+# Build directory
+target/
