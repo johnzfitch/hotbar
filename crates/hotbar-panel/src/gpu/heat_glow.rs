@@ -277,6 +277,33 @@ impl HeatGlowPass {
     fn rng_range(&mut self, lo: f32, hi: f32) -> f32 {
         lo + self.rng_next() * (hi - lo)
     }
+
+    /// Find Y positions where fire column exceeds the given heat threshold.
+    ///
+    /// Scans at 8px intervals after each hit to avoid clustered spawns.
+    /// Used to drive cinder ember ejection from the hottest fire zones.
+    pub fn hot_spots(&self, threshold: f32, height: u32) -> Vec<f32> {
+        scan_hot_spots(&self.fire_column, threshold, height)
+    }
+}
+
+/// Scan a fire column slice for positions exceeding `threshold`.
+///
+/// Skips 8 pixels after each hit to avoid clustered spawns.
+/// Separated from `HeatGlowPass` for testability without GPU resources.
+fn scan_hot_spots(column: &[f32], threshold: f32, height: u32) -> Vec<f32> {
+    let h = (height as usize).min(column.len());
+    let mut spots = Vec::new();
+    let mut y = 0;
+    while y < h {
+        if column[y] > threshold {
+            spots.push(y as f32);
+            y += 8;
+        } else {
+            y += 1;
+        }
+    }
+    spots
 }
 
 #[cfg(test)]
@@ -353,5 +380,35 @@ mod tests {
         let h0 = (heat + 0.0 * 0.08_f32).fract();
         let h1 = (heat + 10.0 * 0.08_f32).fract();
         assert_ne!(h0, h1, "palette should shift with time");
+    }
+
+    #[test]
+    fn hot_spots_empty_for_cold_column() {
+        let col = vec![0.0f32; 100];
+        let spots = super::scan_hot_spots(&col, 0.7, 100);
+        assert!(spots.is_empty(), "cold column should have no hot spots");
+    }
+
+    #[test]
+    fn hot_spots_returns_positions_for_hot_column() {
+        let mut col = vec![0.0f32; 100];
+        for item in col.iter_mut().take(60).skip(50) {
+            *item = 0.9;
+        }
+        let spots = super::scan_hot_spots(&col, 0.7, 100);
+        assert!(!spots.is_empty(), "should find hot spots");
+        assert!(spots[0] >= 50.0 && spots[0] < 60.0);
+    }
+
+    #[test]
+    fn hot_spots_skips_8px_after_hit() {
+        let mut col = vec![0.0f32; 100];
+        // 16 consecutive hot pixels
+        for item in col.iter_mut().take(36).skip(20) {
+            *item = 0.9;
+        }
+        let spots = super::scan_hot_spots(&col, 0.7, 100);
+        // Should find at most 2 hits (20, then 28)
+        assert!(spots.len() <= 2, "should skip 8px: got {} spots", spots.len());
     }
 }

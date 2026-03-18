@@ -495,9 +495,12 @@ impl HotbarShell {
         };
 
         // Passes 1-3: Chrome background, heat glow, flame particles
+        // Returns fire hot spots for cinder ember ejection (unused until
+        // cinder system is wired to the render loop in Phase 5).
+        let _hot_spots;
         {
             crate::dev_trace_span!("gpu_before_egui");
-            effects.render_before_egui(&mut encoder, &view, &gpu.queue, &params);
+            _hot_spots = effects.render_before_egui(&mut encoder, &view, &gpu.queue, &params);
         }
 
         // Pass 4: egui widgets (LoadOp::Load — composites over GPU effects)

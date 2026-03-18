@@ -258,6 +258,26 @@ impl CinderSystem {
         }
     }
 
+    /// Spawn a single ember at a specific Y position.
+    ///
+    /// Lighter than `spawn_burst` — used for passive fire-driven ejection.
+    /// Does not evict existing embers; silently drops if at capacity.
+    pub fn spawn_at(&mut self, y: f32, heat: f32) {
+        if self.active >= MAX_EMBERS {
+            return;
+        }
+        let h = self.hash_next();
+        self.embers[self.active] = Ember {
+            pos_x: 0.0,
+            pos_y: y,
+            vel_x: -(20.0 + (h % 20) as f32),
+            vel_y: -10.0 + (h % 20) as f32,
+            life: 0.6,
+            heat: heat.clamp(0.0, 1.0),
+        };
+        self.active += 1;
+    }
+
     /// Number of active embers (for diagnostics).
     pub fn active_count(&self) -> usize {
         self.active
@@ -481,5 +501,26 @@ mod tests {
         assert!(is_active_write(hotbar_common::Action::Created));
         assert!(!is_active_write(hotbar_common::Action::Opened));
         assert!(!is_active_write(hotbar_common::Action::Deleted));
+    }
+
+    #[test]
+    fn spawn_at_creates_one_ember() {
+        let mut sys = CinderSystem::new();
+        sys.spawn_at(100.0, 0.6);
+        assert_eq!(sys.active_count(), 1);
+    }
+
+    #[test]
+    fn spawn_at_respects_cap() {
+        let mut sys = CinderSystem::new();
+        // Fill to capacity via bursts
+        for i in 0..20 {
+            sys.spawn_burst(i as f32 * 50.0, 0.5);
+        }
+        assert_eq!(sys.active_count(), MAX_EMBERS);
+
+        // spawn_at should silently drop, not evict
+        sys.spawn_at(500.0, 0.8);
+        assert_eq!(sys.active_count(), MAX_EMBERS);
     }
 }

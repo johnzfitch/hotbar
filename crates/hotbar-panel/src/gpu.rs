@@ -168,13 +168,17 @@ impl GpuEffects {
     }
 
     /// Render all pre-egui passes (chrome, heat glow, flames).
+    ///
+    /// Returns hot-spot Y positions from the fire automaton (for cinder
+    /// ember ejection). Caller should feed up to 2 per frame to
+    /// `CinderSystem::spawn_at()`.
     pub fn render_before_egui(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         queue: &wgpu::Queue,
         params: &FrameParams,
-    ) {
+    ) -> Vec<f32> {
         self.time += params.dt;
 
         // Detect selection change to trigger starburst
@@ -201,9 +205,11 @@ impl GpuEffects {
         }
 
         // Pass 2: Heat glow border (fire automaton step, then render)
+        let hot_spots;
         {
             crate::dev_trace_span!("heat_glow_pass");
             self.heat_glow.update_fire(queue, params.heat_intensity, params.height);
+            hot_spots = self.heat_glow.hot_spots(0.7, params.height);
             {
                 crate::dev_trace_span!("heat_glow_encode");
                 self.heat_glow.render(
@@ -231,6 +237,8 @@ impl GpuEffects {
             );
             self.flames.render(encoder, view, params.scissor);
         }
+
+        hot_spots
     }
 
     /// Render all post-egui passes (starburst).
