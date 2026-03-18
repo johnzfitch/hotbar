@@ -28,6 +28,13 @@ flamegraph.svg
 perf.data
 perf.data.old
 
+# Python
+__pycache__/
+*.pyc
+
+# Claude Code
+.claude/plans/
+
 # OS artifacts
 .Trash-*
 
