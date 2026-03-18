@@ -1,9 +1,11 @@
+pub mod intern;
 pub mod protocol;
 pub mod schema;
 pub mod trace_db;
 pub mod types;
 
 // Re-export core types at crate root for convenience
+pub use intern::PathId;
 pub use types::{
     Action, ActionFilter, ActivityLevel, Confidence, FileEvent, Filter, HotFile, Pin, Preference,
     Source, Summary,

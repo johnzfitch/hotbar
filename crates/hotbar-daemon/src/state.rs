@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
+use hotbar_common::intern::{PathId, PathInterner};
 use hotbar_common::protocol::Delta;
 use hotbar_common::types::{
     Action, ActionFilter, ActivityLevel, FileEvent, Filter, HotFile, Pin, Source,
@@ -13,7 +14,9 @@ use crate::db::{self, Db, DbError};
 /// `files()` and `apply_filter()`. Shared as `Arc<RwLock<HotState>>`.
 pub struct HotState {
     files: Vec<HotFile>,
-    by_path: HashMap<String, usize>,
+    by_path: HashMap<PathId, usize>,
+    /// Path string interner — one 4-byte handle per unique path.
+    interner: PathInterner,
     /// Pinned files in the Pit Stop shelf
     pub pins: Vec<Pin>,
     /// Rolling event rate tracker
@@ -28,6 +31,7 @@ impl HotState {
         Self {
             files: Vec::new(),
             by_path: HashMap::new(),
+            interner: PathInterner::new(),
             pins: Vec::new(),
             activity: ActivityTracker::new(10),
             max_files: 200,
@@ -75,8 +79,9 @@ impl HotState {
 
         for event in &events {
             let hotfile = file_event_to_hotfile(event);
+            let path_id = self.interner.intern(&event.path);
 
-            if let Some(&idx) = self.by_path.get(&event.path) {
+            if let Some(&idx) = self.by_path.get(&path_id) {
                 // Existing path — update if newer
                 if event.timestamp > self.files[idx].timestamp {
                     self.files[idx] = hotfile.clone();
@@ -85,7 +90,7 @@ impl HotState {
             } else {
                 // New path
                 let idx = self.files.len();
-                self.by_path.insert(event.path.clone(), idx);
+                self.by_path.insert(path_id, idx);
                 self.files.push(hotfile.clone());
                 delta.added.push(hotfile);
             }
@@ -165,7 +170,8 @@ impl HotState {
     fn rebuild_index(&mut self) {
         self.by_path.clear();
         for (i, file) in self.files.iter().enumerate() {
-            self.by_path.insert(file.path.clone(), i);
+            let id = self.interner.intern(&file.path);
+            self.by_path.insert(id, i);
         }
     }
 }
@@ -594,12 +600,13 @@ mod tests {
         assert_eq!(timestamps, sorted, "insertion sort should maintain DESC order");
 
         // Verify index consistency
-        for (i, file) in state.files().iter().enumerate() {
+        let paths: Vec<String> = state.files().iter().map(|f| f.path.clone()).collect();
+        for (i, path) in paths.iter().enumerate() {
+            let id = state.interner.intern(path);
             assert_eq!(
-                state.by_path.get(&file.path),
+                state.by_path.get(&id),
                 Some(&i),
-                "by_path index should be consistent for {}",
-                file.path
+                "by_path index should be consistent for {path}",
             );
         }
     }
