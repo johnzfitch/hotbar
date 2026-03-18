@@ -3,9 +3,13 @@
 
 struct Uniforms {
     resolution: vec2<f32>,
-    center_y: f32,       // normalized Y position of selection (0.0..1.0)
-    intensity: f32,      // 1.0 -> 0.0 over 0.3s
     time: f32,
+    heat_intensity: f32,
+    fire_height: f32,
+    scanline_lambda: f32,
+    scanline_omega: f32,
+    starburst_center_y: f32,  // normalized Y position of selection (0.0..1.0)
+    starburst_intensity: f32, // 1.0 -> 0.0 over 0.3s
     _pad: vec3<f32>,
 };
 
@@ -31,12 +35,12 @@ const NUM_RAYS: f32 = 14.0;
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    if u.intensity < 0.01 {
+    if u.starburst_intensity < 0.01 {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
     // Center of burst in UV space (horizontally centered, at selection Y)
-    let center = vec2<f32>(0.5, u.center_y);
+    let center = vec2<f32>(0.5, u.starburst_center_y);
     let delta = in.uv - center;
 
     // Aspect ratio correction
@@ -50,14 +54,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let ray = pow(abs(cos(angle * NUM_RAYS / 2.0)), 8.0);
 
     // Radial falloff -- rays extend outward as intensity increases
-    let max_radius = 0.15 + (1.0 - u.intensity) * 0.2;
+    let max_radius = 0.15 + (1.0 - u.starburst_intensity) * 0.2;
     let radial = 1.0 - smoothstep(0.0, max_radius, dist);
 
     // Core glow (always present during burst)
-    let core = exp(-dist * 30.0) * u.intensity;
+    let core = exp(-dist * 30.0) * u.starburst_intensity;
 
     // Combine rays + core
-    let brightness = (ray * radial * 0.6 + core) * u.intensity;
+    let brightness = (ray * radial * 0.6 + core) * u.starburst_intensity;
 
     // Color: yellow core, orange rays
     let yellow = vec3<f32>(1.0, 0.9, 0.3);

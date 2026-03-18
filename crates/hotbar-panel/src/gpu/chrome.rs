@@ -2,30 +2,22 @@
 //!
 //! Draws a fullscreen triangle with an anisotropic noise shader
 //! simulating brushed dark steel. This is the first render pass (bottom layer).
-
-use wgpu::util::DeviceExt;
-
-/// Uniform buffer layout for chrome shader.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct ChromeUniforms {
-    resolution: [f32; 2],
-    time: f32,
-    scanline_lambda: f32,
-    scanline_omega: f32,
-    _pad: [f32; 3],
-}
+//! Uniforms come from the shared `SharedUniforms` buffer.
 
 /// Chrome background render pass.
 pub struct ChromePass {
     pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
 }
 
 impl ChromePass {
     /// Create the chrome pipeline.
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    ///
+    /// Uses the shared uniform bind group layout for group 0.
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        shared_bgl: &wgpu::BindGroupLayout,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("chrome_shader"),
             source: wgpu::ShaderSource::Wgsl(
@@ -33,45 +25,9 @@ impl ChromePass {
             ),
         });
 
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("chrome_uniforms"),
-            contents: bytemuck::cast_slice(&[ChromeUniforms {
-                resolution: [420.0, 1080.0],
-                time: 0.0,
-                scanline_lambda: 8.0,
-                scanline_omega: 2.0,
-                _pad: [0.0; 3],
-            }]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("chrome_bind_group_layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("chrome_bind_group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buffer.as_entire_binding(),
-            }],
-        });
-
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("chrome_pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[shared_bgl],
             push_constant_ranges: &[],
         });
 
@@ -104,42 +60,20 @@ impl ChromePass {
             cache: None,
         });
 
-        Self {
-            pipeline,
-            uniform_buffer,
-            bind_group,
-        }
+        Self { pipeline }
     }
 
     /// Render the chrome background (pass 1).
     ///
     /// Uses `LoadOp::Clear` since this is the first pass.
-    /// `scissor`: `[x, y, width, height]` clipping rectangle for reveal animation.
-    #[allow(clippy::too_many_arguments)]
+    /// Shared uniforms must be uploaded before calling this.
     pub fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        queue: &wgpu::Queue,
-        width: u32,
-        height: u32,
-        time: f32,
-        scanline_lambda: f32,
-        scanline_omega: f32,
+        shared_bind_group: &wgpu::BindGroup,
         scissor: [u32; 4],
     ) {
-        queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::cast_slice(&[ChromeUniforms {
-                resolution: [width as f32, height as f32],
-                time,
-                scanline_lambda,
-                scanline_omega,
-                _pad: [0.0; 3],
-            }]),
-        );
-
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("chrome_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -156,7 +90,7 @@ impl ChromePass {
         });
 
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_bind_group(0, shared_bind_group, &[]);
         pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
         pass.draw(0..3, 0..1); // fullscreen triangle
     }

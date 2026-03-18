@@ -107,6 +107,24 @@ impl SharedGpu {
     }
 }
 
+/// Shared uniform buffer layout for all GPU shader passes.
+///
+/// One buffer, one `write_buffer()` call per frame. Each shader reads
+/// the fields it needs; unused fields are simply ignored.
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SharedUniforms {
+    pub resolution: [f32; 2],
+    pub time: f32,
+    pub heat_intensity: f32,
+    pub fire_height: f32,
+    pub scanline_lambda: f32,
+    pub scanline_omega: f32,
+    pub starburst_center_y: f32,
+    pub starburst_intensity: f32,
+    pub _pad: [f32; 3],
+}
+
 /// Per-frame parameters for all GPU effects.
 pub struct FrameParams {
     /// Activity level: events per second, clamped to 0.0..1.0
@@ -132,6 +150,10 @@ pub struct FrameParams {
 
 /// All GPU effects, initialized once and updated each frame.
 pub struct GpuEffects {
+    /// Shared uniform buffer (written once per frame)
+    shared_uniform_buffer: wgpu::Buffer,
+    /// Shared bind group for uniform-only passes (chrome, starburst)
+    shared_bind_group: wgpu::BindGroup,
     /// Brushed metal background (pass 1)
     pub chrome: chrome::ChromePass,
     /// Edge glow driven by activity (pass 2)
@@ -149,18 +171,76 @@ pub struct GpuEffects {
 }
 
 impl GpuEffects {
-    /// Create all effect pipelines.
+    /// Create all effect pipelines with a shared uniform buffer.
     pub fn new(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         width: u32,
         height: u32,
     ) -> Self {
+        use wgpu::util::DeviceExt;
+
+        // Shared uniform buffer — written once per frame, read by all passes
+        let shared_uniform_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("shared_uniforms"),
+                contents: bytemuck::cast_slice(&[SharedUniforms {
+                    resolution: [width as f32, height as f32],
+                    time: 0.0,
+                    heat_intensity: 0.0,
+                    fire_height: height as f32,
+                    scanline_lambda: 8.0,
+                    scanline_omega: 2.0,
+                    starburst_center_y: 0.5,
+                    starburst_intensity: 0.0,
+                    _pad: [0.0; 3],
+                }]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
+        // Shared bind group layout: binding 0 = SharedUniforms
+        let shared_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("shared_uniform_bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let shared_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shared_uniform_bg"),
+            layout: &shared_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: shared_uniform_buffer.as_entire_binding(),
+            }],
+        });
+
         Self {
-            chrome: chrome::ChromePass::new(device, format),
-            heat_glow: heat_glow::HeatGlowPass::new(device, format),
-            flames: flames::FlamePass::new(device, format, width, height),
-            starburst: starburst::StarburstPass::new(device, format),
+            chrome: chrome::ChromePass::new(device, format, &shared_bgl),
+            heat_glow: heat_glow::HeatGlowPass::new(
+                device,
+                format,
+                &shared_uniform_buffer,
+                &shared_bgl,
+            ),
+            flames: flames::FlamePass::new(
+                device,
+                format,
+                width,
+                height,
+                &shared_uniform_buffer,
+                &shared_bgl,
+            ),
+            starburst: starburst::StarburstPass::new(device, format, &shared_bgl),
+            shared_uniform_buffer,
+            shared_bind_group,
             time: 0.0,
             starburst_intensity: 0.0,
             prev_selected: 0,
@@ -188,40 +268,50 @@ impl GpuEffects {
         }
         self.starburst_intensity = (self.starburst_intensity - params.dt / 0.3).max(0.0);
 
+        let fire_h = (params.height as usize)
+            .min(heat_glow::MAX_FIRE_HEIGHT)
+            .min(self.heat_glow.fire_column_len());
+
+        // Single shared uniform upload for all passes
+        let center_y_normalized = if params.height > 0 {
+            params.selected_y / params.height as f32
+        } else {
+            0.5
+        };
+        queue.write_buffer(
+            &self.shared_uniform_buffer,
+            0,
+            bytemuck::cast_slice(&[SharedUniforms {
+                resolution: [params.width as f32, params.height as f32],
+                time: self.time,
+                heat_intensity: params.heat_intensity,
+                fire_height: fire_h as f32,
+                scanline_lambda: params.scanline_lambda,
+                scanline_omega: params.scanline_omega,
+                starburst_center_y: center_y_normalized,
+                starburst_intensity: self.starburst_intensity,
+                _pad: [0.0; 3],
+            }]),
+        );
+
         // Pass 1: Chrome background (with scan-lines from reveal state)
         {
             crate::dev_trace_span!("chrome_pass");
-            self.chrome.render(
-                encoder,
-                view,
-                queue,
-                params.width,
-                params.height,
-                self.time,
-                params.scanline_lambda,
-                params.scanline_omega,
-                params.scissor,
-            );
+            self.chrome
+                .render(encoder, view, &self.shared_bind_group, params.scissor);
         }
 
         // Pass 2: Heat glow border (fire automaton step, then render)
         let hot_spots;
         {
             crate::dev_trace_span!("heat_glow_pass");
-            self.heat_glow.update_fire(queue, params.heat_intensity, params.height);
+            self.heat_glow
+                .update_fire(queue, params.heat_intensity, params.height);
             hot_spots = self.heat_glow.hot_spots(0.7, params.height);
             {
                 crate::dev_trace_span!("heat_glow_encode");
-                self.heat_glow.render(
-                    encoder,
-                    view,
-                    queue,
-                    params.width,
-                    params.height,
-                    params.heat_intensity,
-                    self.time,
-                    params.scissor,
-                );
+                self.heat_glow
+                    .render(encoder, view, params.scissor);
             }
         }
 
@@ -235,39 +325,28 @@ impl GpuEffects {
                 params.width,
                 params.height,
             );
-            self.flames.render(encoder, view, params.scissor);
+            self.flames
+                .render(encoder, view, params.scissor);
         }
 
         hot_spots
     }
 
     /// Render all post-egui passes (starburst).
+    ///
+    /// Shared uniforms are already uploaded in `render_before_egui`.
     pub fn render_after_egui(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        queue: &wgpu::Queue,
-        params: &FrameParams,
+        _queue: &wgpu::Queue,
+        _params: &FrameParams,
     ) {
         // Pass 5: Starburst (only when active)
         crate::dev_trace_span!("starburst_pass");
         if self.starburst_intensity > 0.01 {
-            let center_y_normalized = if params.height > 0 {
-                params.selected_y / params.height as f32
-            } else {
-                0.5
-            };
-            self.starburst.render(
-                encoder,
-                view,
-                queue,
-                params.width,
-                params.height,
-                center_y_normalized,
-                self.starburst_intensity,
-                self.time,
-                params.scissor,
-            );
+            self.starburst
+                .render(encoder, view, &self.shared_bind_group, _params.scissor);
         }
     }
 

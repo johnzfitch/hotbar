@@ -4,9 +4,13 @@
 struct Uniforms {
     resolution: vec2<f32>,
     time: f32,
+    heat_intensity: f32,
+    fire_height: f32,
     scanline_lambda: f32,
     scanline_omega: f32,
-    _pad: [f32; 3],
+    starburst_center_y: f32,
+    starburst_intensity: f32,
+    _pad: vec3<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;

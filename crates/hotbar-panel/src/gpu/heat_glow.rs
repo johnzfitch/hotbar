@@ -11,25 +11,19 @@ use wgpu::util::DeviceExt;
 
 /// Maximum fire column height (entries, one per pixel row).
 /// 4096 supports up to 4K vertical monitors.
-const MAX_FIRE_HEIGHT: usize = 4096;
-
-/// Uniform buffer layout for heat glow shader.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct HeatGlowUniforms {
-    resolution: [f32; 2],
-    intensity: f32,
-    time: f32,
-    fire_height: f32,
-    _pad: [f32; 3],
-}
+pub const MAX_FIRE_HEIGHT: usize = 4096;
 
 /// Heat glow + fire automaton render pass.
+///
+/// Uses the shared uniform buffer (group 0) plus its own fire column
+/// storage buffer (group 1).
 pub struct HeatGlowPass {
     pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
     fire_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
+    /// Bind group for group 0 (shared uniforms) + group 1 (fire storage).
+    /// Group 0 references the shared uniform buffer; group 1 is owned here.
+    bind_group_0: wgpu::BindGroup,
+    bind_group_1: wgpu::BindGroup,
     /// CPU-side fire column (one float per pixel row, bottom = last index)
     fire_column: Vec<f32>,
     /// Xorshift RNG state for fire injection randomness
@@ -38,24 +32,20 @@ pub struct HeatGlowPass {
 
 impl HeatGlowPass {
     /// Create the heat glow pipeline with fire automaton storage buffer.
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    ///
+    /// `shared_uniform_buffer`: the single uniform buffer written once per frame.
+    /// `shared_bgl`: bind group layout for group 0 (shared uniforms).
+    pub fn new(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        shared_uniform_buffer: &wgpu::Buffer,
+        shared_bgl: &wgpu::BindGroupLayout,
+    ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("heat_glow_shader"),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("../../shaders/heat_glow.wgsl").into(),
             ),
-        });
-
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("heat_glow_uniforms"),
-            contents: bytemuck::cast_slice(&[HeatGlowUniforms {
-                resolution: [420.0, 1080.0],
-                intensity: 0.0,
-                time: 0.0,
-                fire_height: 1080.0,
-                _pad: [0.0; 3],
-            }]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         // Pre-allocate fire column storage buffer at max capacity
@@ -66,53 +56,43 @@ impl HeatGlowPass {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("heat_glow_bind_group_layout"),
-                entries: &[
-                    // Binding 0: uniforms
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    // Binding 1: fire column (storage, read-only)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
+        // Group 0: shared uniforms (reuses the shared bind group layout)
+        let bind_group_0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("heat_glow_bg0"),
+            layout: shared_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: shared_uniform_buffer.as_entire_binding(),
+            }],
+        });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("heat_glow_bind_group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
+        // Group 1: fire column storage
+        let fire_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("heat_glow_fire_bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: fire_buffer.as_entire_binding(),
-                },
-            ],
+                count: None,
+            }],
+        });
+
+        let bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("heat_glow_bg1"),
+            layout: &fire_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: fire_buffer.as_entire_binding(),
+            }],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("heat_glow_pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[shared_bgl, &fire_bgl],
             push_constant_ranges: &[],
         });
 
@@ -161,9 +141,9 @@ impl HeatGlowPass {
 
         Self {
             pipeline,
-            uniform_buffer,
             fire_buffer,
-            bind_group,
+            bind_group_0,
+            bind_group_1,
             fire_column: vec![0.0; MAX_FIRE_HEIGHT],
             fire_rng: 0xBEEF_CAFE,
         }
@@ -217,33 +197,13 @@ impl HeatGlowPass {
     /// Render the heat glow + fire automaton (pass 2).
     ///
     /// Uses `LoadOp::Load` to preserve the chrome background underneath.
-    /// `scissor`: `[x, y, width, height]` clipping rectangle for reveal animation.
-    #[allow(clippy::too_many_arguments)]
+    /// Shared uniforms must be uploaded before calling this.
     pub fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        queue: &wgpu::Queue,
-        width: u32,
-        height: u32,
-        heat_intensity: f32,
-        time: f32,
         scissor: [u32; 4],
     ) {
-        let fire_h = (height as usize).min(MAX_FIRE_HEIGHT).min(self.fire_column.len());
-
-        queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::cast_slice(&[HeatGlowUniforms {
-                resolution: [width as f32, height as f32],
-                intensity: heat_intensity,
-                time,
-                fire_height: fire_h as f32,
-                _pad: [0.0; 3],
-            }]),
-        );
-
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("heat_glow_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -260,7 +220,8 @@ impl HeatGlowPass {
         });
 
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_bind_group(0, &self.bind_group_0, &[]);
+        pass.set_bind_group(1, &self.bind_group_1, &[]);
         pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
         pass.draw(0..3, 0..1);
     }
@@ -284,6 +245,11 @@ impl HeatGlowPass {
     /// Used to drive cinder ember ejection from the hottest fire zones.
     pub fn hot_spots(&self, threshold: f32, height: u32) -> Vec<f32> {
         scan_hot_spots(&self.fire_column, threshold, height)
+    }
+
+    /// Number of entries in the fire column.
+    pub fn fire_column_len(&self) -> usize {
+        self.fire_column.len()
     }
 }
 

@@ -34,15 +34,6 @@ impl Default for Particle {
     }
 }
 
-/// Uniform buffer layout for flame shader.
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct FlameUniforms {
-    resolution: [f32; 2],
-    time: f32,
-    _pad: f32,
-}
-
 /// Simple xorshift RNG for deterministic particle spawning.
 struct Rng {
     state: u32,
@@ -70,11 +61,14 @@ impl Rng {
 }
 
 /// Flame particle render pass.
+///
+/// Uses the shared uniform buffer (group 0) plus its own particle
+/// storage buffer (group 1).
 pub struct FlamePass {
     pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
     particle_buffer: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
+    bind_group_0: wgpu::BindGroup,
+    bind_group_1: wgpu::BindGroup,
     particles: Vec<Particle>,
     active_count: usize,
     rng: Rng,
@@ -82,27 +76,24 @@ pub struct FlamePass {
 
 impl FlamePass {
     /// Create the flame pipeline.
+    ///
+    /// `shared_uniform_buffer`: the single uniform buffer written once per frame.
+    /// `shared_bgl`: bind group layout for group 0 (shared uniforms).
     pub fn new(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         width: u32,
         height: u32,
+        shared_uniform_buffer: &wgpu::Buffer,
+        shared_bgl: &wgpu::BindGroupLayout,
     ) -> Self {
+        let _ = (width, height); // used for initial uniform values, now in shared buffer
+
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("flames_shader"),
             source: wgpu::ShaderSource::Wgsl(
                 include_str!("../../shaders/flames.wgsl").into(),
             ),
-        });
-
-        let uniform_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("flames_uniforms"),
-            contents: bytemuck::cast_slice(&[FlameUniforms {
-                resolution: [width as f32, height as f32],
-                time: 0.0,
-                _pad: 0.0,
-            }]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
         // Pre-allocate particle storage buffer at max capacity
@@ -113,51 +104,43 @@ impl FlamePass {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
-        let bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("flames_bind_group_layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::VERTEX,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ],
-            });
+        // Group 0: shared uniforms
+        let bind_group_0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("flames_bg0"),
+            layout: shared_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: shared_uniform_buffer.as_entire_binding(),
+            }],
+        });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("flames_bind_group"),
-            layout: &bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
+        // Group 1: particle storage
+        let particle_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("flames_particle_bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
                 },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: particle_buffer.as_entire_binding(),
-                },
-            ],
+                count: None,
+            }],
+        });
+
+        let bind_group_1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("flames_bg1"),
+            layout: &particle_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: particle_buffer.as_entire_binding(),
+            }],
         });
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("flames_pipeline_layout"),
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[shared_bgl, &particle_bgl],
             push_constant_ranges: &[],
         });
 
@@ -206,9 +189,9 @@ impl FlamePass {
 
         Self {
             pipeline,
-            uniform_buffer,
             particle_buffer,
-            bind_group,
+            bind_group_0,
+            bind_group_1,
             particles,
             active_count: 0,
             rng: Rng::new(0xDEAD_BEEF),
@@ -288,16 +271,7 @@ impl FlamePass {
             );
         }
 
-        // Update uniforms
-        queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::cast_slice(&[FlameUniforms {
-                resolution: [width_f, height_f],
-                time: 0.0, // not currently used by flame shader
-                _pad: 0.0,
-            }]),
-        );
+        // Uniforms are written via the shared uniform buffer in GpuEffects.
     }
 
     /// Render flame particles (pass 3).
@@ -327,7 +301,8 @@ impl FlamePass {
         });
 
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_bind_group(0, &self.bind_group_0, &[]);
+        pass.set_bind_group(1, &self.bind_group_1, &[]);
         pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
         // 4 vertices per quad (triangle strip), one instance per active particle
         pass.draw(0..4, 0..self.active_count as u32);

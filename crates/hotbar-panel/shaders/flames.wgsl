@@ -4,7 +4,13 @@
 struct Uniforms {
     resolution: vec2<f32>,
     time: f32,
-    _pad: f32,
+    heat_intensity: f32,
+    fire_height: f32,
+    scanline_lambda: f32,
+    scanline_omega: f32,
+    starburst_center_y: f32,
+    starburst_intensity: f32,
+    _pad: vec3<f32>,
 };
 
 struct Particle {
@@ -17,7 +23,7 @@ struct Particle {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var<storage, read> particles: array<Particle>;
+@group(1) @binding(0) var<storage, read> particles: array<Particle>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,

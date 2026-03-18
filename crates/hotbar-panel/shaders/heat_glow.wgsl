@@ -5,14 +5,18 @@
 
 struct Uniforms {
     resolution: vec2<f32>,
-    intensity: f32,
     time: f32,
+    heat_intensity: f32,
     fire_height: f32,
+    scanline_lambda: f32,
+    scanline_omega: f32,
+    starburst_center_y: f32,
+    starburst_intensity: f32,
     _pad: vec3<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var<storage, read> fire_column: array<f32>;
+@group(1) @binding(0) var<storage, read> fire_column: array<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -104,15 +108,15 @@ fn heat_color(t: f32) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    if u.intensity < 0.01 {
+    if u.heat_intensity < 0.01 {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
     let px = in.uv * u.resolution;
 
     // ── Left edge: fire automaton with Ferrari palette ──
-    let fire_extent = 20.0 + 30.0 * u.intensity;  // 20-50px depth, scales with heat
-    let wobble = edge_wobble(px.y, u.time, u.intensity);
+    let fire_extent = 20.0 + 30.0 * u.heat_intensity;  // 20-50px depth, scales with heat
+    let wobble = edge_wobble(px.y, u.time, u.heat_intensity);
     let dist_left = px.x;
     let effective_fire_width = fire_extent + wobble;
 
@@ -139,16 +143,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let dist_bottom = u.resolution.y - px.y;
     let edge_dist = min(dist_right, min(dist_top, dist_bottom));
 
-    let glow_width = mix(15.0, 60.0, u.intensity);
+    let glow_width = mix(15.0, 60.0, u.heat_intensity);
     let glow = 1.0 - smoothstep(0.0, glow_width, edge_dist);
     if glow < 0.001 {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
     // Pulse at high intensity (~2Hz)
-    let pulse = 1.0 + sin(u.time * 4.0) * 0.15 * u.intensity;
-    let color = heat_color(u.intensity);
-    let alpha = glow * u.intensity * pulse * 0.8;
+    let pulse = 1.0 + sin(u.time * 4.0) * 0.15 * u.heat_intensity;
+    let color = heat_color(u.heat_intensity);
+    let alpha = glow * u.heat_intensity * pulse * 0.8;
 
     return vec4<f32>(color * alpha, alpha);
 }
