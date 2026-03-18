@@ -51,6 +51,7 @@ impl XbelParser {
     /// Re-reads the entire file each call, returning all entries within the 24h window.
     /// The state module handles deduplication.
     pub fn read_new(&self) -> Result<Vec<FileEvent>, IngestError> {
+        let _span = tracing::debug_span!("xbel_ingest").entered();
         let content = match std::fs::read_to_string(&self.path) {
             Ok(c) => c,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

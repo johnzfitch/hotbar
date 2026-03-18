@@ -55,6 +55,7 @@ impl CodexWatcher {
     /// Scans today + yesterday's session directories, sorted by mtime (most recent first),
     /// capped at 20 files. Returns events within the 24h window.
     pub fn read_new(&mut self) -> Result<Vec<FileEvent>, IngestError> {
+        let _span = tracing::debug_span!("codex_ingest").entered();
         let session_files = self.find_session_files();
         if session_files.is_empty() {
             tracing::debug!("no recent Codex session files found");

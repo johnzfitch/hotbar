@@ -1,5 +1,6 @@
 pub mod protocol;
 pub mod schema;
+pub mod trace_db;
 pub mod types;
 
 // Re-export core types at crate root for convenience

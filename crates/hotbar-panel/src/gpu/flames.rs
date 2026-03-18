@@ -227,6 +227,7 @@ impl FlamePass {
         width: u32,
         height: u32,
     ) {
+        let _span = tracing::trace_span!("flames_sim", particles = self.active_count).entered();
         let width_f = width as f32;
         let height_f = height as f32;
 
@@ -245,20 +246,18 @@ impl FlamePass {
                 width_f + self.rng.range(-4.0, 2.0)
             };
 
+            let life = 0.8 + self.rng.range(0.0, 0.6);
             self.particles[self.active_count] = Particle {
                 pos: [side, self.rng.range(height_f * 0.1, height_f * 0.95)],
                 vel: [
                     self.rng.range(-8.0, 8.0),                  // horizontal drift
                     -(30.0 + self.rng.range(0.0, 40.0)),        // rise upward
                 ],
-                life: 0.8 + self.rng.range(0.0, 0.6),
-                max_life: 0.8 + self.rng.range(0.0, 0.6),
+                life,
+                max_life: life,
                 size: 3.0 + self.rng.range(0.0, 5.0),
                 _pad: 0.0,
             };
-            // Ensure max_life matches life for fresh particles
-            self.particles[self.active_count].max_life =
-                self.particles[self.active_count].life;
             self.active_count += 1;
         }
 
@@ -305,7 +304,9 @@ impl FlamePass {
     ///
     /// Uses `LoadOp::Load` + additive blend. Each particle is a 4-vertex
     /// triangle strip instance.
-    pub fn render(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+    /// `scissor`: `[x, y, width, height]` clipping rectangle for reveal animation.
+    pub fn render(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, scissor: [u32; 4]) {
+        let _span = tracing::trace_span!("flames_encode", particles = self.active_count).entered();
         if self.active_count == 0 {
             return;
         }
@@ -327,6 +328,7 @@ impl FlamePass {
 
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
         // 4 vertices per quad (triangle strip), one instance per active particle
         pass.draw(0..4, 0..self.active_count as u32);
     }

@@ -4,10 +4,14 @@
 //! The selected file sits at the center, with adjacent files fading out.
 //! Scroll or j/k to rotate, click to select, flick for momentum.
 
+use std::collections::{HashMap, HashSet};
+
 use egui::{Color32, Painter, Pos2, Rect, Response, Sense, Ui, Vec2, Widget};
 use hotbar_common::HotFile;
 
+use crate::anim;
 use crate::theme;
+use crate::widgets::torch;
 
 /// How many files are visible above/below the selected item.
 const VISIBLE_SLOTS: usize = 6;
@@ -20,6 +24,17 @@ const MIN_VELOCITY: f32 = 0.1;
 
 /// Height of each file slot in the spinner.
 const SLOT_HEIGHT: f32 = 52.0;
+
+/// A file fading out of the spinner after removal from the active list.
+#[derive(Debug, Clone)]
+pub struct DepartingFile {
+    /// The file data (cloned at time of departure).
+    pub file: HotFile,
+    /// Elapsed time since departure started.
+    pub elapsed: f32,
+    /// Y offset relative to spinner center (pixels) at departure.
+    pub y_offset: f32,
+}
 
 /// State for the spinner widget, persisted across frames.
 #[derive(Debug)]
@@ -34,6 +49,14 @@ pub struct SpinnerState {
     dragging: bool,
     /// Last drag Y position (for velocity calculation during drag)
     pub last_drag_y: f32,
+    /// Active arrival animations (path -> elapsed seconds).
+    arrivals: HashMap<String, f32>,
+    /// Files animating out of the spinner.
+    departing: Vec<DepartingFile>,
+    /// Paths seen on the previous frame (for detecting changes).
+    prev_paths: HashSet<String>,
+    /// Previous frame's file list (for cloning departing file data).
+    prev_files: Vec<HotFile>,
 }
 
 impl Default for SpinnerState {
@@ -44,6 +67,10 @@ impl Default for SpinnerState {
             selected_index: 0,
             dragging: false,
             last_drag_y: 0.0,
+            arrivals: HashMap::new(),
+            departing: Vec::new(),
+            prev_paths: HashSet::new(),
+            prev_files: Vec::new(),
         }
     }
 }
@@ -93,6 +120,71 @@ impl SpinnerState {
         self.offset = index as f32;
         self.velocity = 0.0;
         self.selected_index = index;
+    }
+
+    /// Sync transition tracking with the current file list.
+    ///
+    /// Detects newly arrived files (triggers slide-in animation) and
+    /// departed files (triggers fade-out animation). Call once per frame
+    /// before drawing.
+    pub fn sync_files(&mut self, files: &[HotFile], dt: f32) {
+        let _span = tracing::trace_span!("file_transitions").entered();
+
+        let current_paths: HashSet<String> = files.iter().map(|f| f.path.clone()).collect();
+
+        // Skip first frame (no previous data to diff against)
+        if !self.prev_paths.is_empty() {
+            // Detect new arrivals
+            for f in files {
+                if !self.prev_paths.contains(&f.path) && !self.arrivals.contains_key(&f.path) {
+                    self.arrivals.insert(f.path.clone(), 0.0);
+                    tracing::debug!(path = %f.filename, "file arrived");
+                }
+            }
+
+            // Detect departures — clone file data for the fade-out animation
+            for prev_path in &self.prev_paths {
+                if !current_paths.contains(prev_path)
+                    && let Some(prev_file) = self.prev_files.iter().find(|f| &f.path == prev_path)
+                {
+                    let prev_idx = self.prev_files.iter()
+                        .position(|f| &f.path == prev_path)
+                        .unwrap_or(0);
+                    let y_offset = (prev_idx as f32 - self.offset) * SLOT_HEIGHT;
+                    self.departing.push(DepartingFile {
+                        file: prev_file.clone(),
+                        elapsed: 0.0,
+                        y_offset,
+                    });
+                    tracing::debug!(path = %prev_path, "file departing");
+                }
+            }
+        }
+
+        // Advance arrival timers, remove completed
+        self.arrivals.retain(|_, elapsed| {
+            *elapsed += dt;
+            *elapsed < anim::FileTransition::ARRIVAL_DURATION
+        });
+
+        // Advance departure timers, remove completed
+        self.departing.retain_mut(|d| {
+            d.elapsed += dt;
+            d.elapsed < anim::FileTransition::DEPARTURE_DURATION
+        });
+
+        self.prev_paths = current_paths;
+        self.prev_files = files.to_vec();
+    }
+
+    /// Get the arrival transition for a file (if actively animating in).
+    pub fn arrival_transition(&self, path: &str) -> Option<anim::FileTransition> {
+        self.arrivals.get(path).map(|&elapsed| anim::FileTransition::arrival_at(elapsed))
+    }
+
+    /// Active departing files (for drawing during fade-out).
+    pub fn departing_files(&self) -> &[DepartingFile] {
+        &self.departing
     }
 }
 
@@ -159,11 +251,17 @@ impl Widget for Spinner<'_> {
         // Advance physics
         self.state.tick(self.files.len());
 
+        // Sync file transitions (arrivals/departures)
+        let dt = ui.input(|i| i.predicted_dt);
+        self.state.sync_files(self.files, dt);
+
         // Draw
+        let _draw_span = tracing::trace_span!("spinner_draw").entered();
         let painter = ui.painter_at(rect);
         let center_y = rect.center().y;
         let selected_idx = self.state.selected_index;
         let offset_frac = self.state.offset - self.state.offset.floor();
+        let time = ui.input(|i| i.time) as f32;
 
         for slot in -(VISIBLE_SLOTS as i32)..=(VISIBLE_SLOTS as i32) {
             let file_idx = self.state.offset.round() as i32 + slot;
@@ -178,19 +276,46 @@ impl Widget for Spinner<'_> {
 
             // Fade based on distance from center
             let distance = (y_offset / (SLOT_HEIGHT * VISIBLE_SLOTS as f32)).abs();
-            let alpha = ((1.0 - distance) * 255.0).clamp(40.0, 255.0) as u8;
+            let base_alpha = ((1.0 - distance) * 255.0).clamp(40.0, 255.0);
+
+            // Apply arrival transition (slide + fade)
+            let (extra_x, alpha_mult) = match self.state.arrival_transition(&file.path) {
+                Some(trans) => (trans.x_offset(), trans.alpha()),
+                None => (0.0, 1.0),
+            };
+            let alpha = (base_alpha * alpha_mult).clamp(0.0, 255.0) as u8;
 
             let is_selected = file_idx == selected_idx;
 
             draw_file_slot(
                 &painter,
                 file,
-                Pos2::new(rect.left() + 8.0, slot_y),
+                Pos2::new(rect.left() + 8.0 + extra_x, slot_y),
                 rect.width() - 16.0,
                 SLOT_HEIGHT,
                 is_selected,
                 alpha,
+                time,
             );
+        }
+
+        // Draw departing files (fading out at their last position)
+        for dep in self.state.departing_files() {
+            let trans = anim::FileTransition::departure_at(dep.elapsed);
+            let dep_alpha = (trans.alpha() * 255.0) as u8;
+            if dep_alpha > 5 {
+                let slot_y = center_y + dep.y_offset;
+                draw_file_slot(
+                    &painter,
+                    &dep.file,
+                    Pos2::new(rect.left() + 8.0 + trans.x_offset(), slot_y),
+                    rect.width() - 16.0,
+                    SLOT_HEIGHT,
+                    false,
+                    dep_alpha,
+                    time,
+                );
+            }
         }
 
         // Draw selection highlight bar
@@ -210,6 +335,7 @@ impl Widget for Spinner<'_> {
 }
 
 /// Draw a single file slot in the spinner.
+#[allow(clippy::too_many_arguments)]
 fn draw_file_slot(
     painter: &Painter,
     file: &HotFile,
@@ -218,9 +344,11 @@ fn draw_file_slot(
     height: f32,
     is_selected: bool,
     alpha: u8,
+    time: f32,
 ) {
     let rect = Rect::from_min_size(top_left, Vec2::new(width, height));
     let src_color = theme::source_color(file.source);
+    let active_write = torch::is_active_write(file.action);
 
     // Background for selected
     if is_selected {
@@ -236,15 +364,26 @@ fn draw_file_slot(
         );
     }
 
-    // Source indicator dot
+    // Source indicator dot -- flicker modulation for active writes
     let dot_center = Pos2::new(top_left.x + 10.0, top_left.y + height / 2.0);
+    let dot_alpha = if active_write {
+        let flicker = anim::flicker_intensity(time, torch::path_hash(&file.path));
+        (alpha as f32 * flicker) as u8
+    } else {
+        alpha
+    };
     let dot_color = Color32::from_rgba_premultiplied(
         src_color.r(),
         src_color.g(),
         src_color.b(),
-        alpha,
+        dot_alpha,
     );
     painter.circle_filled(dot_center, 4.0, dot_color);
+
+    // Torch sprite for active writes (next to source dot, pointing upward)
+    if active_write {
+        torch::draw_torch(painter, dot_center, time, src_color);
+    }
 
     // Filename
     let text_color = if is_selected {

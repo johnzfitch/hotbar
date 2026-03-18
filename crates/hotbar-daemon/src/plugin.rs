@@ -189,6 +189,12 @@ impl PluginManager {
             .find(|p| p.manifest.name == plugin_name)
             .ok_or_else(|| PluginError::NotFound(plugin_name.to_string()))?;
 
+        tracing::debug!(
+            plugin = plugin_name,
+            timeout_ms = plugin.manifest.timeout_ms,
+            "invoking plugin"
+        );
+
         let timeout = std::time::Duration::from_millis(plugin.manifest.timeout_ms);
 
         tokio::time::timeout(timeout, run_plugin(plugin, payload))

@@ -52,6 +52,8 @@ impl DirScanner {
         active_dirs: &HashSet<String>,
         agent_timestamps: &HashMap<String, i64>,
     ) -> Result<Vec<FileEvent>, IngestError> {
+        let _span =
+            tracing::debug_span!("dirscan_ingest", dirs = active_dirs.len()).entered();
         let now = unix_now();
         let cutoff = now - 86400;
         let mut events = Vec::new();

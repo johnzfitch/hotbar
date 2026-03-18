@@ -58,6 +58,24 @@ fn default_search_limit() -> usize {
     50
 }
 
+impl Command {
+    /// Short name for logging/tracing (matches the serde tag).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Toggle => "toggle",
+            Self::Quit => "quit",
+            Self::SetFilter { .. } => "set_filter",
+            Self::SetActionFilter { .. } => "set_action_filter",
+            Self::Pin { .. } => "pin",
+            Self::Unpin { .. } => "unpin",
+            Self::Summarize { .. } => "summarize",
+            Self::Search { .. } => "search",
+            Self::GetState => "get_state",
+            Self::Refresh => "refresh",
+        }
+    }
+}
+
 /// Responses from hotbar back to clients
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

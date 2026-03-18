@@ -211,6 +211,13 @@ async fn ollama_generate(
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
 
+    tracing::debug!(
+        url = base_url,
+        model,
+        content_len = file_content.len(),
+        "ollama inference request"
+    );
+
     // Parse host:port from URL
     let url = base_url
         .strip_prefix("http://")

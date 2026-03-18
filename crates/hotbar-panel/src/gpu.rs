@@ -121,6 +121,13 @@ pub struct FrameParams {
     pub selected_index: usize,
     /// Y position of selected slot center (screen-space pixels)
     pub selected_y: f32,
+    /// Scan-line wavelength in pixels (from reveal animation state)
+    pub scanline_lambda: f32,
+    /// Scan-line scroll rate (from reveal animation state)
+    pub scanline_omega: f32,
+    /// Scissor clipping rect `[x, y, width, height]` for reveal animation.
+    /// Full surface `[0, 0, width, height]` when no clipping is active.
+    pub scissor: [u32; 4],
 }
 
 /// All GPU effects, initialized once and updated each frame.
@@ -177,30 +184,53 @@ impl GpuEffects {
         }
         self.starburst_intensity = (self.starburst_intensity - params.dt / 0.3).max(0.0);
 
-        // Pass 1: Chrome background
-        self.chrome
-            .render(encoder, view, queue, params.width, params.height, self.time);
+        // Pass 1: Chrome background (with scan-lines from reveal state)
+        {
+            let _span = tracing::trace_span!("chrome_pass").entered();
+            self.chrome.render(
+                encoder,
+                view,
+                queue,
+                params.width,
+                params.height,
+                self.time,
+                params.scanline_lambda,
+                params.scanline_omega,
+                params.scissor,
+            );
+        }
 
-        // Pass 2: Heat glow border
-        self.heat_glow.render(
-            encoder,
-            view,
-            queue,
-            params.width,
-            params.height,
-            params.heat_intensity,
-            self.time,
-        );
+        // Pass 2: Heat glow border (fire automaton step, then render)
+        {
+            let _span = tracing::trace_span!("heat_glow_pass").entered();
+            self.heat_glow.update_fire(queue, params.heat_intensity, params.height);
+            {
+                let _span = tracing::trace_span!("heat_glow_encode").entered();
+                self.heat_glow.render(
+                    encoder,
+                    view,
+                    queue,
+                    params.width,
+                    params.height,
+                    params.heat_intensity,
+                    self.time,
+                    params.scissor,
+                );
+            }
+        }
 
         // Pass 3: Flame particles
-        self.flames.update(
-            queue,
-            params.heat_intensity,
-            params.dt,
-            params.width,
-            params.height,
-        );
-        self.flames.render(encoder, view);
+        {
+            let _span = tracing::trace_span!("flames_pass").entered();
+            self.flames.update(
+                queue,
+                params.heat_intensity,
+                params.dt,
+                params.width,
+                params.height,
+            );
+            self.flames.render(encoder, view, params.scissor);
+        }
     }
 
     /// Render all post-egui passes (starburst).
@@ -212,6 +242,7 @@ impl GpuEffects {
         params: &FrameParams,
     ) {
         // Pass 5: Starburst (only when active)
+        let _span = tracing::trace_span!("starburst_pass").entered();
         if self.starburst_intensity > 0.01 {
             let center_y_normalized = if params.height > 0 {
                 params.selected_y / params.height as f32
@@ -227,6 +258,7 @@ impl GpuEffects {
                 center_y_normalized,
                 self.starburst_intensity,
                 self.time,
+                params.scissor,
             );
         }
     }

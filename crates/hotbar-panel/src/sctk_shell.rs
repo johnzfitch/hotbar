@@ -40,6 +40,7 @@ use smithay_client_toolkit::{
 use wayland_client::protocol::wl_keyboard::KeyState;
 use wayland_client::{Proxy, WEnum};
 
+use crate::anim::{AgentShake, BurnInMitigation, PanelReveal, RevealPhase};
 use crate::gpu::{SharedGpu, GpuEffects, FrameParams};
 use crate::theme;
 
@@ -180,6 +181,16 @@ pub struct HotbarShell {
     heat_intensity: f32,
     /// Current selected spinner index
     selected_index: usize,
+    /// Last frame timestamp for accurate dt calculation
+    last_frame_time: std::time::Instant,
+
+    // ── Animation ──
+    /// Panel reveal state machine (3-phase entrance animation)
+    panel_reveal: PanelReveal,
+    /// OLED burn-in mitigation (periodic subpixel content shift)
+    burn_in: BurnInMitigation,
+    /// Agent shake (horizontal oscillation on heat spike)
+    agent_shake: AgentShake,
 
     // ── App state ──
     visibility: PanelVisibility,
@@ -249,6 +260,10 @@ impl HotbarShell {
             gpu_effects: None,
             heat_intensity: 0.0,
             selected_index: 0,
+            last_frame_time: std::time::Instant::now(),
+            panel_reveal: PanelReveal::new(config.width as f32),
+            burn_in: BurnInMitigation::new(),
+            agent_shake: AgentShake::new(),
             visibility: PanelVisibility::Visible,
             config,
             exit_requested: false,
@@ -260,6 +275,7 @@ impl HotbarShell {
 
     /// Create the layer surface and show the panel.
     pub fn create_surface(&mut self, qh: &QueueHandle<Self>) {
+        tracing::debug!("creating layer-shell surface");
         let wl_surface = self.compositor_state.create_surface(qh);
         let layer_surface = self.layer_shell.create_layer_surface(
             qh,
@@ -286,6 +302,7 @@ impl HotbarShell {
 
     /// Initialize GPU resources and egui renderer once the surface is configured.
     fn init_gpu(&mut self) -> Result<(), ShellError> {
+        let _span = tracing::debug_span!("init_gpu").entered();
         let layer_surface = self.layer_surface.as_ref()
             .expect("init_gpu called before surface created");
 
@@ -349,22 +366,47 @@ impl HotbarShell {
     /// Render a frame: GPU effects + egui, composited in 5 passes.
     ///
     /// Pass order:
-    /// 1. Chrome background (LoadOp::Clear)
+    /// 1. Chrome background (LoadOp::Clear) — with scan-line modulation
     /// 2. Heat glow edges (LoadOp::Load, additive)
     /// 3. Flame particles (LoadOp::Load, additive)
     /// 4. egui widgets (LoadOp::Load, alpha blend)
     /// 5. Starburst (LoadOp::Load, additive)
+    ///
+    /// All passes are clipped by a scissor rect during the reveal animation.
     fn render_frame(&mut self) {
+        let _frame_span = tracing::trace_span!("render_frame").entered();
+
         let Some(gpu) = &self.gpu else { return };
         let Some(surface) = &self.wgpu_surface else { return };
         let Some(renderer) = &mut self.egui_renderer else { return };
         let Some(surface_config) = &self.surface_config else { return };
         let Some(effects) = &mut self.gpu_effects else { return };
 
-        // Prepare egui input
+        // ── Reveal state machine ──
+        let reveal = {
+            let _span = tracing::trace_span!("reveal_update").entered();
+            self.panel_reveal.update()
+        };
+        if reveal.phase == RevealPhase::Hidden {
+            return; // Nothing to render
+        }
+
+        // ── Measure frame dt (used by shake, GPU effects, transitions) ──
+        let frame_start = std::time::Instant::now();
+        let dt = frame_start.duration_since(self.last_frame_time).as_secs_f32().clamp(0.001, 0.1);
+        self.last_frame_time = frame_start;
+
+        // ── Agent shake (horizontal oscillation on heat spike) ──
+        let heat_for_shake = reveal.heat_override.unwrap_or(self.heat_intensity);
+        let shake_offset = self.agent_shake.update(dt, heat_for_shake);
+
+        // ── Burn-in mitigation (subpixel content shift) ──
+        let burn_offset = self.burn_in.update();
+
+        // Prepare egui input with burn-in + shake offset applied to screen rect origin
         let mut input = self.egui_input.take();
         input.screen_rect = Some(egui::Rect::from_min_size(
-            egui::Pos2::ZERO,
+            egui::pos2(burn_offset.x + shake_offset, burn_offset.y),
             egui::vec2(self.width as f32, self.height as f32),
         ));
 
@@ -372,17 +414,23 @@ impl HotbarShell {
         theme::apply_theme(&self.egui_ctx);
 
         // Run egui frame
-        let full_output = self.egui_ctx.run(input, |ctx| {
-            if let Some(cb) = &mut self.ui_callback {
-                cb(ctx);
-            }
-        });
+        let full_output = {
+            let _span = tracing::trace_span!("egui_run").entered();
+            self.egui_ctx.run(input, |ctx| {
+                if let Some(cb) = &mut self.ui_callback {
+                    cb(ctx);
+                }
+            })
+        };
 
         // Tessellate
-        let clipped_primitives = self.egui_ctx.tessellate(
-            full_output.shapes,
-            full_output.pixels_per_point,
-        );
+        let clipped_primitives = {
+            let _span = tracing::trace_span!("egui_tessellate").entered();
+            self.egui_ctx.tessellate(
+                full_output.shapes,
+                full_output.pixels_per_point,
+            )
+        };
 
         // Acquire swapchain frame
         let output_frame = match surface.get_current_texture() {
@@ -417,60 +465,101 @@ impl HotbarShell {
             },
         );
 
-        // Prepare frame params for GPU effects
-        let dt = 1.0 / 60.0; // TODO: measure actual frame time with Instant
+        // Compute heat: reveal animation can override daemon-driven heat
+        let heat = reveal
+            .heat_override
+            .unwrap_or(self.heat_intensity)
+            .clamp(0.0, 1.0);
+
+        // Compute scissor rect for reveal clipping.
+        // Panel is right-anchored: reveal expands from the right edge leftward.
+        let scissor = if reveal.width >= self.width as f32 {
+            // No clipping needed (Done/idle state, or width >= panel)
+            [0, 0, self.width, self.height]
+        } else {
+            let reveal_px = (reveal.width as u32).min(self.width).max(1);
+            let x = self.width.saturating_sub(reveal_px);
+            [x, 0, reveal_px, self.height]
+        };
+
         let params = FrameParams {
-            heat_intensity: self.heat_intensity.clamp(0.0, 1.0),
+            heat_intensity: heat,
             width: self.width,
             height: self.height,
             dt,
             selected_index: self.selected_index,
             selected_y: self.height as f32 * 0.5, // approximate center
+            scanline_lambda: reveal.scanline_lambda,
+            scanline_omega: reveal.scanline_omega,
+            scissor,
         };
 
         // Passes 1-3: Chrome background, heat glow, flame particles
-        effects.render_before_egui(&mut encoder, &view, &gpu.queue, &params);
+        {
+            let _span = tracing::trace_span!("gpu_before_egui").entered();
+            effects.render_before_egui(&mut encoder, &view, &gpu.queue, &params);
+        }
 
         // Pass 4: egui widgets (LoadOp::Load — composites over GPU effects)
-        renderer.update_buffers(
-            &gpu.device,
-            &gpu.queue,
-            &mut encoder,
-            &clipped_primitives,
-            &screen_descriptor,
-        );
+        {
+            let _span = tracing::trace_span!("egui_render").entered();
+            renderer.update_buffers(
+                &gpu.device,
+                &gpu.queue,
+                &mut encoder,
+                &clipped_primitives,
+                &screen_descriptor,
+            );
 
-        // wgpu 24: begin_render_pass borrows the encoder. egui-wgpu 0.31
-        // requires RenderPass<'static>, so we use forget_lifetime() to erase
-        // the borrow and let egui own the pass.
-        let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("egui_render_pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load, // Load (not Clear!) — preserve GPU effects
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-        });
+            // wgpu 24: begin_render_pass borrows the encoder. egui-wgpu 0.31
+            // requires RenderPass<'static>, so we use forget_lifetime() to erase
+            // the borrow and let egui own the pass.
+            let render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("egui_render_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
 
-        let mut render_pass = render_pass.forget_lifetime();
-        renderer.render(&mut render_pass, &clipped_primitives, &screen_descriptor);
-        drop(render_pass);
+            let mut render_pass = render_pass.forget_lifetime();
+            // Apply reveal scissor to egui pass too
+            render_pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
+            renderer.render(&mut render_pass, &clipped_primitives, &screen_descriptor);
+            drop(render_pass);
+        }
 
         // Pass 5: Starburst (on top of everything)
-        effects.render_after_egui(&mut encoder, &view, &gpu.queue, &params);
+        {
+            let _span = tracing::trace_span!("gpu_after_egui").entered();
+            effects.render_after_egui(&mut encoder, &view, &gpu.queue, &params);
+        }
 
-        gpu.queue.submit(std::iter::once(encoder.finish()));
-        output_frame.present();
+        {
+            let _span = tracing::trace_span!("present").entered();
+            gpu.queue.submit(std::iter::once(encoder.finish()));
+            output_frame.present();
+        }
 
         // Free textures
         for id in &full_output.textures_delta.free {
             renderer.free_texture(id);
+        }
+
+        // Frame budget monitor: warn if CPU-side frame time exceeds 16ms
+        let frame_cpu_ms = frame_start.elapsed().as_secs_f32() * 1000.0;
+        if frame_cpu_ms > 16.0 {
+            tracing::warn!(
+                frame_ms = format_args!("{frame_cpu_ms:.1}"),
+                "frame budget exceeded (>16ms)"
+            );
         }
     }
 
@@ -479,13 +568,18 @@ impl HotbarShell {
         self.ui_callback = Some(Box::new(callback));
     }
 
-    /// Toggle panel visibility.
+    /// Toggle panel visibility with animated reveal.
     pub fn toggle_visibility(&mut self) {
-        self.visibility = match self.visibility {
-            PanelVisibility::Visible => PanelVisibility::Hidden,
-            PanelVisibility::Hidden => PanelVisibility::Visible,
-        };
-        // TODO: animate slide in/out
+        match self.visibility {
+            PanelVisibility::Visible => {
+                self.visibility = PanelVisibility::Hidden;
+                self.panel_reveal.trigger_close();
+            }
+            PanelVisibility::Hidden => {
+                self.visibility = PanelVisibility::Visible;
+                self.panel_reveal.trigger_open();
+            }
+        }
         tracing::info!(visibility = ?self.visibility, "panel toggled");
     }
 
@@ -564,7 +658,10 @@ impl CompositorHandler for HotbarShell {
         _surface: &WlSurface,
         _time: u32,
     ) {
-        if self.visibility == PanelVisibility::Visible && self.surface_configured {
+        // Render when visible OR when the reveal animation is still running
+        let should_render = self.surface_configured
+            && (self.visibility == PanelVisibility::Visible || self.panel_reveal.is_animating());
+        if should_render {
             self.render_frame();
 
             // Request next frame
@@ -674,6 +771,8 @@ impl LayerShellHandler for HotbarShell {
                 if let (Some(gpu), Some(effects)) = (&self.gpu, &mut self.gpu_effects) {
                     effects.resize(&gpu.device, new_width, new_height);
                 }
+                // Keep reveal aware of new panel dimensions
+                self.panel_reveal.set_panel_width(new_width as f32);
             }
         }
     }

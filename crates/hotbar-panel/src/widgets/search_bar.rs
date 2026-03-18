@@ -112,6 +112,7 @@ pub fn draw_search_bar(
                 event = Some(SearchEvent::Clear);
                 state.mark_dispatched();
             } else {
+                tracing::debug!(query = %state.query, "search dispatched");
                 event = Some(SearchEvent::Search(state.query.clone()));
                 state.mark_dispatched();
             }

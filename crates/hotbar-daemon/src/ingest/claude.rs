@@ -69,6 +69,7 @@ impl ClaudeCursor {
     /// On first call, processes the entire file. On subsequent calls, reads only
     /// new bytes appended since the last offset. Returns events within the 24h window.
     pub fn read_new(&mut self) -> Result<Vec<FileEvent>, IngestError> {
+        let _span = tracing::debug_span!("claude_ingest").entered();
         let metadata = match std::fs::metadata(&self.path) {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

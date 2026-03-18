@@ -131,6 +131,7 @@ async fn dispatch_command(
     db: &Arc<Mutex<Db>>,
     cmd_tx: &tokio::sync::mpsc::Sender<Command>,
 ) -> Response {
+    tracing::debug!(cmd = %cmd.name(), "ipc dispatch");
     match cmd {
         Command::Toggle | Command::Quit => {
             // Forward to panel via channel

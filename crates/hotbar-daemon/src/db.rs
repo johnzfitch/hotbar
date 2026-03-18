@@ -94,6 +94,7 @@ impl Db {
 
     /// Insert a batch of file events.
     pub fn insert_events(&self, events: &[FileEvent]) -> Result<usize, DbError> {
+        let _span = tracing::debug_span!("db_insert_events", batch_size = events.len()).entered();
         let mut count = 0;
         let mut stmt = self.conn.prepare_cached(
             "INSERT INTO file_events (session_id, path, event_type, source, timestamp, confidence)
@@ -168,6 +169,7 @@ impl Db {
 
     /// Insert or update a pin.
     pub fn upsert_pin(&self, pin: &Pin) -> Result<(), DbError> {
+        tracing::debug!(path = %pin.path, "db upsert pin");
         self.conn.execute(
             "INSERT OR REPLACE INTO pins (path, label, pin_group, position, pinned_at)
              VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -178,6 +180,7 @@ impl Db {
 
     /// Remove a pin by path.
     pub fn remove_pin(&self, path: &str) -> Result<bool, DbError> {
+        tracing::debug!(path, "db remove pin");
         let affected = self.conn.execute("DELETE FROM pins WHERE path = ?1", [path])?;
         Ok(affected > 0)
     }
@@ -206,6 +209,7 @@ impl Db {
 
     /// Insert or update a cached summary.
     pub fn upsert_summary(&self, path: &str, content: &str, model: &str) -> Result<(), DbError> {
+        tracing::debug!(path, model, "db upsert summary");
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -272,6 +276,7 @@ impl Db {
         key: &str,
         value: &str,
     ) -> Result<(), DbError> {
+        tracing::debug!(plugin, key, "db set plugin state");
         self.conn.execute(
             "INSERT OR REPLACE INTO plugin_state (plugin, key, value) VALUES (?1, ?2, ?3)",
             params![plugin, key, value],

@@ -62,6 +62,8 @@ impl HotState {
     /// Events are merged by path (most recent wins). The returned Delta
     /// lists added, updated, and removed files.
     pub fn apply_events(&mut self, events: Vec<FileEvent>) -> Delta {
+        let _span =
+            tracing::debug_span!("state_apply_events", event_count = events.len()).entered();
         if events.is_empty() {
             return Delta {
                 activity_level: ActivityLevel(self.activity.events_per_second()),

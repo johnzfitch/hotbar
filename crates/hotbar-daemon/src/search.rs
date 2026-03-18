@@ -35,6 +35,7 @@ pub fn search(db: &Db, query: &str, limit: usize) -> Result<Vec<HotFile>, DbErro
         return db.get_events(None, limit);
     }
 
+    let _span = tracing::debug_span!("fts5_search", query, limit).entered();
     let escaped = escape_fts5_query(query);
 
     // Phase 1: Get matching paths from FTS5, ranked by BM25
