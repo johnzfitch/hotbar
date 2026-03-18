@@ -134,6 +134,54 @@ impl Summarizer {
         &self.config.backend
     }
 
+    /// Run inference on a file without database access.
+    ///
+    /// Returns `(summary_text, model_name)`. Caller is responsible for
+    /// cache lookup and storage. This avoids holding a Db lock across
+    /// async boundaries (Db contains RefCell and is !Sync).
+    pub async fn infer(&self, path: &str) -> Result<(String, String), InferenceError> {
+        match self.config.backend {
+            InferenceBackend::Ollama => {}
+            InferenceBackend::Burn => {
+                return Err(InferenceError::NotAvailable(
+                    "burn backend not yet implemented; use 'ollama' or 'none'".into(),
+                ));
+            }
+            InferenceBackend::None => {
+                return Err(InferenceError::NotAvailable(
+                    "inference disabled in config".into(),
+                ));
+            }
+        }
+
+        let metadata = tokio::fs::metadata(path).await?;
+        if metadata.len() > MAX_FILE_SIZE {
+            return Err(InferenceError::FileTooLarge(metadata.len()));
+        }
+
+        let content = tokio::fs::read_to_string(path).await?;
+        let truncated = if content.len() > MAX_PROMPT_CONTENT {
+            let mut end = MAX_PROMPT_CONTENT;
+            while !content.is_char_boundary(end) {
+                end -= 1;
+            }
+            &content[..end]
+        } else {
+            &content
+        };
+
+        let summary = tokio::time::timeout(
+            INFERENCE_TIMEOUT,
+            ollama_generate(&self.config.ollama_url, &self.config.ollama_model, truncated),
+        )
+        .await
+        .map_err(|_| InferenceError::Timeout)??;
+
+        let model = self.config.ollama_model.clone();
+        tracing::debug!(path, model = %model, "inference complete");
+        Ok((summary, model))
+    }
+
     /// Summarize a file, returning the summary text.
     ///
     /// Checks the database cache first. On cache miss, reads the file,

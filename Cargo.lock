@@ -729,6 +729,7 @@ dependencies = [
 name = "hotbar-panel"
 version = "2.0.0-alpha.1"
 dependencies = [
+ "anyhow",
  "bytemuck",
  "egui",
  "egui-wgpu",
@@ -741,6 +742,7 @@ dependencies = [
  "smithay-client-toolkit",
  "thiserror 2.0.18",
  "tokio",
+ "toml",
  "tracing",
  "tracing-subscriber",
  "wayland-backend",

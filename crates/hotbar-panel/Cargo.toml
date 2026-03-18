@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "hotbar"
+path = "src/main.rs"
+
 [dependencies]
 hotbar-common = { path = "../hotbar-common" }
 hotbar-daemon = { path = "../hotbar-daemon" }
@@ -25,3 +29,5 @@ xkbcommon = { version = "0.8", features = ["wayland"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"

@@ -1,10 +1,12 @@
 pub mod anim;
+pub mod app;
+pub mod config;
+pub mod dispatch;
 pub mod gpu;
+pub mod keybinds;
 pub mod sctk_shell;
 pub mod theme;
 pub mod widgets;
-pub mod keybinds;
-pub mod app;
 
 /// Trace-level span that compiles to nothing in release builds.
 ///

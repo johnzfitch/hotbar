@@ -166,6 +166,25 @@ impl HotState {
         Ok(())
     }
 
+    /// Collect unique parent directories from tracked files (for dir scanner).
+    pub fn active_directories(&self) -> std::collections::HashSet<String> {
+        self.files
+            .iter()
+            .map(|f| f.full_dir.clone())
+            .collect()
+    }
+
+    /// Collect agent-originated timestamps by path (for dir scanner dedup).
+    pub fn agent_timestamps(&self) -> std::collections::HashMap<String, i64> {
+        self.files
+            .iter()
+            .filter(|f| {
+                matches!(f.source, Source::Claude | Source::Codex)
+            })
+            .map(|f| (f.path.clone(), f.timestamp))
+            .collect()
+    }
+
     /// Rebuild the by_path index from the current files vec.
     fn rebuild_index(&mut self) {
         self.by_path.clear();
