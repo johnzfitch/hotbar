@@ -11,7 +11,9 @@ use wgpu::util::DeviceExt;
 struct ChromeUniforms {
     resolution: [f32; 2],
     time: f32,
-    _pad: f32,
+    scanline_lambda: f32,
+    scanline_omega: f32,
+    _pad: [f32; 3],
 }
 
 /// Chrome background render pass.
@@ -36,7 +38,9 @@ impl ChromePass {
             contents: bytemuck::cast_slice(&[ChromeUniforms {
                 resolution: [420.0, 1080.0],
                 time: 0.0,
-                _pad: 0.0,
+                scanline_lambda: 8.0,
+                scanline_omega: 2.0,
+                _pad: [0.0; 3],
             }]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
@@ -110,6 +114,8 @@ impl ChromePass {
     /// Render the chrome background (pass 1).
     ///
     /// Uses `LoadOp::Clear` since this is the first pass.
+    /// `scissor`: `[x, y, width, height]` clipping rectangle for reveal animation.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -118,6 +124,9 @@ impl ChromePass {
         width: u32,
         height: u32,
         time: f32,
+        scanline_lambda: f32,
+        scanline_omega: f32,
+        scissor: [u32; 4],
     ) {
         queue.write_buffer(
             &self.uniform_buffer,
@@ -125,7 +134,9 @@ impl ChromePass {
             bytemuck::cast_slice(&[ChromeUniforms {
                 resolution: [width as f32, height as f32],
                 time,
-                _pad: 0.0,
+                scanline_lambda,
+                scanline_omega,
+                _pad: [0.0; 3],
             }]),
         );
 
@@ -146,6 +157,7 @@ impl ChromePass {
 
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
         pass.draw(0..3, 0..1); // fullscreen triangle
     }
 }

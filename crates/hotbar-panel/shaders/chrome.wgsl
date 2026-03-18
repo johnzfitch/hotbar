@@ -4,7 +4,9 @@
 struct Uniforms {
     resolution: vec2<f32>,
     time: f32,
-    _pad: f32,
+    scanline_lambda: f32,
+    scanline_omega: f32,
+    _pad: [f32; 3],
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -68,7 +70,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let center = vec2<f32>(0.5, 0.5);
     let vignette = 1.0 - length(uv - center) * 0.3;
 
-    let final_color = metal * vignette;
+    var final_color = metal * vignette;
+
+    // Scan-line overlay -- horizontal lines that scroll with time.
+    // During reveal Crack phase: tight (lambda=3) and frenetic (omega=12).
+    // At idle: wide (lambda=8) and barely perceptible (omega=2).
+    if (u.scanline_lambda > 0.0) {
+        let pixel_y = uv.y * u.resolution.y;
+        let scanline = 0.92 + 0.08 * sin(pixel_y / u.scanline_lambda * 6.2832 + u.time * u.scanline_omega);
+        final_color *= scanline;
+    }
 
     return vec4<f32>(final_color, 0.95); // 0.95 alpha for layer-shell transparency
 }
