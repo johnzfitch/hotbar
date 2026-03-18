@@ -1,7 +1,8 @@
-//! GPU device and visual effects — flames, chrome, heat glow, starburst.
+//! GPU device and visual effects — chrome+heat, flames, starburst.
 //!
-//! Each effect is a separate render pass that composites with the egui layer.
-//! All share the same wgpu::Device from SharedGpu.
+//! Chrome and heat glow are merged into a single pass (chrome_heat).
+//! All share the same wgpu::Device from SharedGpu and a single
+//! SharedUniforms buffer.
 
 pub mod chrome;
 pub mod flames;
@@ -152,15 +153,13 @@ pub struct FrameParams {
 pub struct GpuEffects {
     /// Shared uniform buffer (written once per frame)
     shared_uniform_buffer: wgpu::Buffer,
-    /// Shared bind group for uniform-only passes (chrome, starburst)
+    /// Shared bind group for uniform-only passes (starburst)
     shared_bind_group: wgpu::BindGroup,
-    /// Brushed metal background (pass 1)
-    pub chrome: chrome::ChromePass,
-    /// Edge glow driven by activity (pass 2)
-    pub heat_glow: heat_glow::HeatGlowPass,
-    /// Flame particles along edges (pass 3)
+    /// Chrome background + heat glow (merged pass 1, LoadOp::Clear)
+    pub chrome_heat: chrome::ChromeHeatPass,
+    /// Flame particles along edges (pass 2)
     pub flames: flames::FlamePass,
-    /// Selection explosion effect (pass 5)
+    /// Selection explosion effect (pass 4)
     pub starburst: starburst::StarburstPass,
     /// Elapsed time since startup (seconds)
     time: f32,
@@ -223,8 +222,7 @@ impl GpuEffects {
         });
 
         Self {
-            chrome: chrome::ChromePass::new(device, format, &shared_bgl),
-            heat_glow: heat_glow::HeatGlowPass::new(
+            chrome_heat: chrome::ChromeHeatPass::new(
                 device,
                 format,
                 &shared_uniform_buffer,
@@ -270,7 +268,7 @@ impl GpuEffects {
 
         let fire_h = (params.height as usize)
             .min(heat_glow::MAX_FIRE_HEIGHT)
-            .min(self.heat_glow.fire_column_len());
+            .min(self.chrome_heat.fire_column_len());
 
         // Single shared uniform upload for all passes
         let center_y_normalized = if params.height > 0 {
@@ -294,28 +292,17 @@ impl GpuEffects {
             }]),
         );
 
-        // Pass 1: Chrome background (with scan-lines from reveal state)
-        {
-            crate::dev_trace_span!("chrome_pass");
-            self.chrome
-                .render(encoder, view, &self.shared_bind_group, params.scissor);
-        }
-
-        // Pass 2: Heat glow border (fire automaton step, then render)
+        // Pass 1: Chrome background + heat glow (merged, LoadOp::Clear)
         let hot_spots;
         {
-            crate::dev_trace_span!("heat_glow_pass");
-            self.heat_glow
+            crate::dev_trace_span!("chrome_heat_pass");
+            self.chrome_heat
                 .update_fire(queue, params.heat_intensity, params.height);
-            hot_spots = self.heat_glow.hot_spots(0.7, params.height);
-            {
-                crate::dev_trace_span!("heat_glow_encode");
-                self.heat_glow
-                    .render(encoder, view, params.scissor);
-            }
+            hot_spots = self.chrome_heat.hot_spots(0.7, params.height);
+            self.chrome_heat.render(encoder, view, params.scissor);
         }
 
-        // Pass 3: Flame particles
+        // Pass 2: Flame particles
         {
             crate::dev_trace_span!("flames_pass");
             self.flames.update(
@@ -325,8 +312,7 @@ impl GpuEffects {
                 params.width,
                 params.height,
             );
-            self.flames
-                .render(encoder, view, params.scissor);
+            self.flames.render(encoder, view, params.scissor);
         }
 
         hot_spots
