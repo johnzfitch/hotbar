@@ -169,7 +169,8 @@ hotbar/
 │   ├── hotbar-common/       # Shared types & protocol
 │   │   ├── types.rs         # HotFile, Source, Action, Filter
 │   │   ├── protocol.rs      # Command/Response IPC
-│   │   └── schema.rs        # SQL DDL, migrations
+│   │   ├── schema.rs        # SQL DDL, migrations
+│   │   └── trace_db.rs      # SQLite tracing layer (spans + events)
 │   │
 │   ├── hotbar-daemon/       # Background daemon
 │   │   ├── db.rs            # SQLite + FTS5
@@ -199,6 +200,10 @@ hotbar/
 │           ├── summary.rs   # Summary popover
 │           ├── filter_bar.rs # Filter chips
 │           └── logo.rs      # HOTBAR wordmark
+│
+├── tools/
+│   ├── trace-viewer.sh      # Launcher script
+│   └── trace-viewer.py      # DeltaGraph-inspired trace viewer (htmx)
 │
 ├── CLAUDE.md                # Multi-agent development plan
 ├── README.md                # This file
@@ -255,6 +260,58 @@ cargo test --workspace
 4. **Sandbox path filtering** — events.jsonl contains `/test/`, `/home/user/` sandbox paths. Only accept paths under `$HOME`.
 
 5. **Agent timestamp tolerance** — Dir scan uses 5s tolerance (`agent_ts >= mtime - 5s`) to account for baseTime drift in relative timestamps.
+
+---
+
+## Trace Viewer
+
+Hotbar includes a built-in trace viewer for profiling and debugging both the daemon and panel. All `tracing` spans and events are written to a shared SQLite database at `~/.local/share/hotbar/traces.db` via a custom `tracing_subscriber::Layer`.
+
+### Usage
+
+```bash
+# Launch the viewer (opens browser automatically)
+./tools/trace-viewer.sh
+
+# Or with options
+python tools/trace-viewer.py --port 8777 --db path/to/traces.db
+```
+
+Then open `http://localhost:8777` in your browser.
+
+### Views
+
+| View | Style | What It Shows |
+|------|-------|---------------|
+| **Timeline** | DeltaGraph | Hierarchical span tree with colored duration bars |
+| **Events** | DeltaGraph Notebook | Filterable log with level badges (DEBUG/INFO/WARN/ERROR) |
+| **Performance** | DeltaGraph Bar Chart | Latency percentiles (P50/P90/P95/P99) + duration histogram |
+| **Top Spans** | DeltaGraph Notebook | Slowest 100 spans ranked by duration |
+| **Heatmap** | Lotus 1-2-3 | Spreadsheet grid (A-Z columns, numbered rows) with heat-colored cells |
+| **Trend** | Lotus Line Chart | Frame-by-frame sparkline with 16ms budget threshold line |
+| **Pie** | Harvard Graphics | Conic-gradient pie chart with 3D shadow + proportional stacked bar |
+| **Waterfall** | Harvard Graphics Cascade | Gantt-like timeline showing span positions and nesting depth |
+
+### How Tracing Works
+
+Both `hotbar` (panel) and `hotbar-daemon` register a `trace_db::SqliteLayer` on startup:
+
+```rust
+let sqlite_layer = trace_db::init("panel")?;
+tracing_subscriber::registry()
+    .with(env_filter)
+    .with(fmt_layer)
+    .with(sqlite_layer)
+    .init();
+```
+
+The layer captures every `tracing::debug_span!`, `tracing::info!`, etc. into three tables:
+
+- **`sessions`** — one row per process startup (pid, component, start time)
+- **`spans`** — one row per span close (name, target, level, start/end timestamps, fields)
+- **`events`** — one row per tracing event (level, target, message, timestamp)
+
+Data is batched (64 entries per flush), WAL-mode for concurrent access, and auto-pruned (>30 days) on startup.
 
 ---
 

@@ -310,6 +310,15 @@ Key compatibility issues resolved:
    └── lib.rs
    ```
 
+5. **Trace Viewer** (`tools/trace-viewer.py`):
+   - DeltaGraph/Lotus 1-2-3/Harvard Graphics inspired web UI for profiling
+   - Reads from `~/.local/share/hotbar/traces.db` (shared SQLite WAL-mode DB)
+   - `trace_db::SqliteLayer` in `hotbar-common/src/trace_db.rs` captures all `tracing` spans/events
+   - Both daemon and panel register the layer via `trace_db::init("component")`
+   - 8 views: Timeline, Events, Performance, Top Spans, Heatmap, Trend, Pie, Waterfall
+   - Launch: `./tools/trace-viewer.sh` (serves htmx UI on port 8777)
+   - Auto-prunes data older than 30 days on startup
+
 ---
 
 ## Phase 5: Integration + Wiring
