@@ -95,8 +95,16 @@ impl HotState {
         self.activity.record_events(events.len() as u32);
         delta.activity_level = ActivityLevel(self.activity.events_per_second());
 
-        // Re-sort by timestamp DESC
-        self.files.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        // Insertion sort (DESC by timestamp). O(n) on nearly-sorted data —
+        // the vec was sorted before, only k=1-5 entries changed, so each
+        // out-of-place element swaps a few positions at most.
+        for i in 1..self.files.len() {
+            let mut j = i;
+            while j > 0 && self.files[j].timestamp > self.files[j - 1].timestamp {
+                self.files.swap(j, j - 1);
+                j -= 1;
+            }
+        }
 
         // Rebuild index after sort
         self.rebuild_index();
@@ -556,5 +564,43 @@ mod tests {
         assert_eq!(hotfile.full_dir, "/home/zack/dev/hotbar");
         assert_eq!(hotfile.mime_type, "text/x-rust");
         assert_eq!(hotfile.action, Action::Created);
+    }
+
+    #[test]
+    fn insertion_sort_matches_full_sort() {
+        let mut state = HotState::new();
+
+        // Initial batch (establishes sorted order)
+        state.apply_events(vec![
+            make_event("/a.rs", Action::Created, Source::Claude, 100),
+            make_event("/b.rs", Action::Modified, Source::User, 200),
+            make_event("/c.rs", Action::Modified, Source::Codex, 300),
+            make_event("/d.rs", Action::Opened, Source::User, 400),
+            make_event("/e.rs", Action::Created, Source::System, 500),
+        ]);
+        assert_eq!(state.files()[0].timestamp, 500);
+
+        // Insert events at various positions in the sort order
+        state.apply_events(vec![
+            make_event("/f.rs", Action::Modified, Source::Claude, 250), // mid
+            make_event("/g.rs", Action::Created, Source::User, 600),   // new top
+            make_event("/b.rs", Action::Modified, Source::User, 450),  // update, moves up
+        ]);
+
+        // Verify DESC order is maintained
+        let timestamps: Vec<i64> = state.files().iter().map(|f| f.timestamp).collect();
+        let mut sorted = timestamps.clone();
+        sorted.sort_by(|a, b| b.cmp(a));
+        assert_eq!(timestamps, sorted, "insertion sort should maintain DESC order");
+
+        // Verify index consistency
+        for (i, file) in state.files().iter().enumerate() {
+            assert_eq!(
+                state.by_path.get(&file.path),
+                Some(&i),
+                "by_path index should be consistent for {}",
+                file.path
+            );
+        }
     }
 }
