@@ -5,3 +5,4 @@ pub mod ipc;
 pub mod plugin;
 pub mod search;
 pub mod state;
+pub mod write_behind;

@@ -119,6 +119,26 @@ impl Db {
         Ok(count)
     }
 
+    /// Insert a batch of file events inside an explicit transaction.
+    ///
+    /// One disk sync per batch instead of one per row. Prefer this over
+    /// `insert_events` when writing buffered/batched data.
+    pub fn insert_events_batch(&self, events: &[FileEvent]) -> Result<usize, DbError> {
+        if events.is_empty() {
+            return Ok(0);
+        }
+        let _span =
+            tracing::debug_span!("db_insert_events_batch", batch_size = events.len()).entered();
+        self.conn.execute_batch("BEGIN")?;
+        let result = self.insert_events(events);
+        if result.is_ok() {
+            self.conn.execute_batch("COMMIT")?;
+        } else {
+            let _ = self.conn.execute_batch("ROLLBACK");
+        }
+        result
+    }
+
     /// Get recent file events, optionally filtered by source.
     /// Returns HotFile structs ready for display.
     pub fn get_events(
