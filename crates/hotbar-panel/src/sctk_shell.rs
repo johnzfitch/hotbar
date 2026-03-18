@@ -374,7 +374,7 @@ impl HotbarShell {
     ///
     /// All passes are clipped by a scissor rect during the reveal animation.
     fn render_frame(&mut self) {
-        let _frame_span = tracing::trace_span!("render_frame").entered();
+        crate::dev_trace_span!("render_frame");
 
         let Some(gpu) = &self.gpu else { return };
         let Some(surface) = &self.wgpu_surface else { return };
@@ -384,7 +384,7 @@ impl HotbarShell {
 
         // ── Reveal state machine ──
         let reveal = {
-            let _span = tracing::trace_span!("reveal_update").entered();
+            crate::dev_trace_span!("reveal_update");
             self.panel_reveal.update()
         };
         if reveal.phase == RevealPhase::Hidden {
@@ -415,7 +415,7 @@ impl HotbarShell {
 
         // Run egui frame
         let full_output = {
-            let _span = tracing::trace_span!("egui_run").entered();
+            crate::dev_trace_span!("egui_run");
             self.egui_ctx.run(input, |ctx| {
                 if let Some(cb) = &mut self.ui_callback {
                     cb(ctx);
@@ -425,7 +425,7 @@ impl HotbarShell {
 
         // Tessellate
         let clipped_primitives = {
-            let _span = tracing::trace_span!("egui_tessellate").entered();
+            crate::dev_trace_span!("egui_tessellate");
             self.egui_ctx.tessellate(
                 full_output.shapes,
                 full_output.pixels_per_point,
@@ -496,13 +496,13 @@ impl HotbarShell {
 
         // Passes 1-3: Chrome background, heat glow, flame particles
         {
-            let _span = tracing::trace_span!("gpu_before_egui").entered();
+            crate::dev_trace_span!("gpu_before_egui");
             effects.render_before_egui(&mut encoder, &view, &gpu.queue, &params);
         }
 
         // Pass 4: egui widgets (LoadOp::Load — composites over GPU effects)
         {
-            let _span = tracing::trace_span!("egui_render").entered();
+            crate::dev_trace_span!("egui_render");
             renderer.update_buffers(
                 &gpu.device,
                 &gpu.queue,
@@ -538,12 +538,12 @@ impl HotbarShell {
 
         // Pass 5: Starburst (on top of everything)
         {
-            let _span = tracing::trace_span!("gpu_after_egui").entered();
+            crate::dev_trace_span!("gpu_after_egui");
             effects.render_after_egui(&mut encoder, &view, &gpu.queue, &params);
         }
 
         {
-            let _span = tracing::trace_span!("present").entered();
+            crate::dev_trace_span!("present");
             gpu.queue.submit(std::iter::once(encoder.finish()));
             output_frame.present();
         }

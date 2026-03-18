@@ -18,16 +18,21 @@ impl Action {
         Action::Created,
         Action::Deleted,
     ];
+
+    /// Zero-allocation string representation.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Action::Opened => "opened",
+            Action::Modified => "modified",
+            Action::Created => "created",
+            Action::Deleted => "deleted",
+        }
+    }
 }
 
 impl std::fmt::Display for Action {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Action::Opened => write!(f, "opened"),
-            Action::Modified => write!(f, "modified"),
-            Action::Created => write!(f, "created"),
-            Action::Deleted => write!(f, "deleted"),
-        }
+        f.write_str(self.as_str())
     }
 }
 
@@ -44,16 +49,21 @@ pub enum Source {
 impl Source {
     /// All variants for iteration
     pub const ALL: &[Source] = &[Source::Claude, Source::Codex, Source::User, Source::System];
+
+    /// Zero-allocation string representation.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Source::Claude => "claude",
+            Source::Codex => "codex",
+            Source::User => "user",
+            Source::System => "system",
+        }
+    }
 }
 
 impl std::fmt::Display for Source {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Source::Claude => write!(f, "claude"),
-            Source::Codex => write!(f, "codex"),
-            Source::User => write!(f, "user"),
-            Source::System => write!(f, "system"),
-        }
+        f.write_str(self.as_str())
     }
 }
 

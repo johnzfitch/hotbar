@@ -227,7 +227,7 @@ impl FlamePass {
         width: u32,
         height: u32,
     ) {
-        let _span = tracing::trace_span!("flames_sim", particles = self.active_count).entered();
+        crate::dev_trace_span!("flames_sim", particles = self.active_count);
         let width_f = width as f32;
         let height_f = height as f32;
 
@@ -306,7 +306,7 @@ impl FlamePass {
     /// triangle strip instance.
     /// `scissor`: `[x, y, width, height]` clipping rectangle for reveal animation.
     pub fn render(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, scissor: [u32; 4]) {
-        let _span = tracing::trace_span!("flames_encode", particles = self.active_count).entered();
+        crate::dev_trace_span!("flames_encode", particles = self.active_count);
         if self.active_count == 0 {
             return;
         }

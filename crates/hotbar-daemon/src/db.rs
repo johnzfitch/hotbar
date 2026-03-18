@@ -105,8 +105,8 @@ impl Db {
             stmt.execute(params![
                 event.session_id,
                 event.path,
-                event.action.to_string(),
-                event.source.to_string(),
+                event.action.as_str(),
+                event.source.as_str(),
                 event.timestamp,
                 match event.confidence {
                     Confidence::High => "high",

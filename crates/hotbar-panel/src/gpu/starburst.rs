@@ -130,6 +130,7 @@ impl StarburstPass {
     ///
     /// `center_y_normalized`: Y position of selected slot, normalized to 0.0..1.0.
     /// `intensity`: 1.0 on trigger, decays to 0.0 over 0.3s.
+    /// `scissor`: `[x, y, width, height]` clipping rectangle for reveal animation.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
@@ -141,6 +142,7 @@ impl StarburstPass {
         center_y_normalized: f32,
         intensity: f32,
         time: f32,
+        scissor: [u32; 4],
     ) {
         queue.write_buffer(
             &self.uniform_buffer,
@@ -171,6 +173,7 @@ impl StarburstPass {
 
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
         pass.draw(0..3, 0..1);
     }
 }

@@ -6,3 +6,4 @@ pub mod toast;
 pub mod summary;
 pub mod filter_bar;
 pub mod logo;
+pub mod torch;

@@ -186,7 +186,7 @@ impl GpuEffects {
 
         // Pass 1: Chrome background (with scan-lines from reveal state)
         {
-            let _span = tracing::trace_span!("chrome_pass").entered();
+            crate::dev_trace_span!("chrome_pass");
             self.chrome.render(
                 encoder,
                 view,
@@ -202,10 +202,10 @@ impl GpuEffects {
 
         // Pass 2: Heat glow border (fire automaton step, then render)
         {
-            let _span = tracing::trace_span!("heat_glow_pass").entered();
+            crate::dev_trace_span!("heat_glow_pass");
             self.heat_glow.update_fire(queue, params.heat_intensity, params.height);
             {
-                let _span = tracing::trace_span!("heat_glow_encode").entered();
+                crate::dev_trace_span!("heat_glow_encode");
                 self.heat_glow.render(
                     encoder,
                     view,
@@ -221,7 +221,7 @@ impl GpuEffects {
 
         // Pass 3: Flame particles
         {
-            let _span = tracing::trace_span!("flames_pass").entered();
+            crate::dev_trace_span!("flames_pass");
             self.flames.update(
                 queue,
                 params.heat_intensity,
@@ -242,7 +242,7 @@ impl GpuEffects {
         params: &FrameParams,
     ) {
         // Pass 5: Starburst (only when active)
-        let _span = tracing::trace_span!("starburst_pass").entered();
+        crate::dev_trace_span!("starburst_pass");
         if self.starburst_intensity > 0.01 {
             let center_y_normalized = if params.height > 0 {
                 params.selected_y / params.height as f32

@@ -128,13 +128,11 @@ impl SpinnerState {
     /// departed files (triggers fade-out animation). Call once per frame
     /// before drawing.
     pub fn sync_files(&mut self, files: &[HotFile], dt: f32) {
-        let _span = tracing::trace_span!("file_transitions").entered();
-
-        let current_paths: HashSet<String> = files.iter().map(|f| f.path.clone()).collect();
+        crate::dev_trace_span!("file_transitions");
 
         // Skip first frame (no previous data to diff against)
         if !self.prev_paths.is_empty() {
-            // Detect new arrivals
+            // Detect new arrivals: in current but not in prev
             for f in files {
                 if !self.prev_paths.contains(&f.path) && !self.arrivals.contains_key(&f.path) {
                     self.arrivals.insert(f.path.clone(), 0.0);
@@ -142,21 +140,18 @@ impl SpinnerState {
                 }
             }
 
-            // Detect departures — clone file data for the fade-out animation
-            for prev_path in &self.prev_paths {
-                if !current_paths.contains(prev_path)
-                    && let Some(prev_file) = self.prev_files.iter().find(|f| &f.path == prev_path)
-                {
-                    let prev_idx = self.prev_files.iter()
-                        .position(|f| &f.path == prev_path)
-                        .unwrap_or(0);
+            // Detect departures: in prev but not in current
+            // Linear scan — with ~200 files this is ~40K comparisons,
+            // cheaper than building a HashSet (which hashes + clones 200 strings).
+            for (prev_idx, prev_file) in self.prev_files.iter().enumerate() {
+                if !files.iter().any(|f| f.path == prev_file.path) {
                     let y_offset = (prev_idx as f32 - self.offset) * SLOT_HEIGHT;
                     self.departing.push(DepartingFile {
                         file: prev_file.clone(),
                         elapsed: 0.0,
                         y_offset,
                     });
-                    tracing::debug!(path = %prev_path, "file departing");
+                    tracing::debug!(path = %prev_file.path, "file departing");
                 }
             }
         }
@@ -173,8 +168,15 @@ impl SpinnerState {
             d.elapsed < anim::FileTransition::DEPARTURE_DURATION
         });
 
-        self.prev_paths = current_paths;
-        self.prev_files = files.to_vec();
+        // Rebuild prev_paths: clear + refill reuses the HashSet's allocation
+        self.prev_paths.clear();
+        for f in files {
+            self.prev_paths.insert(f.path.clone());
+        }
+
+        // Reuse prev_files Vec capacity
+        self.prev_files.clear();
+        self.prev_files.extend_from_slice(files);
     }
 
     /// Get the arrival transition for a file (if actively animating in).
@@ -256,7 +258,7 @@ impl Widget for Spinner<'_> {
         self.state.sync_files(self.files, dt);
 
         // Draw
-        let _draw_span = tracing::trace_span!("spinner_draw").entered();
+        crate::dev_trace_span!("spinner_draw");
         let painter = ui.painter_at(rect);
         let center_y = rect.center().y;
         let selected_idx = self.state.selected_index;
@@ -439,11 +441,10 @@ fn draw_file_slot(
         action_color.b(),
         alpha,
     );
-    let action_text = file.action.to_string();
     painter.text(
         Pos2::new(top_left.x + width - 8.0, top_left.y + height / 2.0),
         egui::Align2::RIGHT_CENTER,
-        &action_text,
+        file.action.as_str(),
         egui::FontId::new(theme::FONT_SIZE_BADGE, egui::FontFamily::Proportional),
         badge_color,
     );
@@ -482,7 +483,7 @@ pub fn draw_showcase(ui: &mut Ui, file: &HotFile) {
             );
             ui.colored_label(
                 src_color,
-                egui::RichText::new(file.source.to_string()).small(),
+                egui::RichText::new(file.source.as_str()).small(),
             );
 
             ui.add_space(8.0);
@@ -490,13 +491,19 @@ pub fn draw_showcase(ui: &mut Ui, file: &HotFile) {
             // Action badge
             ui.colored_label(
                 action_color,
-                egui::RichText::new(file.action.to_string()).small(),
+                egui::RichText::new(file.action.as_str()).small(),
             );
 
             ui.add_space(8.0);
 
             // Timestamp
-            let age = format_age(file.timestamp);
+            // Reuse thread-local scratch buffer for age formatting
+            thread_local! { static AGE_BUF: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) }; }
+            let age = AGE_BUF.with(|buf| {
+                let mut buf = buf.borrow_mut();
+                format_age_into(file.timestamp, &mut buf);
+                buf.clone() // egui needs owned string; clone reuses buf capacity next frame
+            });
             ui.colored_label(
                 theme::TEXT_DIMMED,
                 egui::RichText::new(age).small(),
@@ -514,7 +521,12 @@ pub fn draw_showcase(ui: &mut Ui, file: &HotFile) {
 }
 
 /// Format a Unix timestamp as a human-readable age string.
-fn format_age(timestamp: i64) -> String {
+///
+/// Writes into the provided scratch buffer to avoid per-frame allocation.
+/// Returns a slice of the buffer containing the formatted string.
+fn format_age_into(timestamp: i64, buf: &mut String) {
+    use std::fmt::Write;
+    buf.clear();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -522,13 +534,13 @@ fn format_age(timestamp: i64) -> String {
 
     let diff = now - timestamp;
     if diff < 60 {
-        format!("{diff}s ago")
+        let _ = write!(buf, "{diff}s ago");
     } else if diff < 3600 {
-        format!("{}m ago", diff / 60)
+        let _ = write!(buf, "{}m ago", diff / 60);
     } else if diff < 86400 {
-        format!("{}h ago", diff / 3600)
+        let _ = write!(buf, "{}h ago", diff / 3600);
     } else {
-        format!("{}d ago", diff / 86400)
+        let _ = write!(buf, "{}d ago", diff / 86400);
     }
 }
 
@@ -600,10 +612,9 @@ mod tests {
 
     #[test]
     fn format_age_seconds() {
-        // Can't test exact output since it depends on current time,
-        // but we can test the function doesn't panic
-        let result = format_age(0);
-        assert!(result.contains("ago") || result.contains("d ago"));
+        let mut buf = String::new();
+        format_age_into(0, &mut buf);
+        assert!(buf.contains("ago"));
     }
 
     #[test]
@@ -612,8 +623,9 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        let result = format_age(now - 30);
-        assert!(result.contains("30s ago"));
+        let mut buf = String::new();
+        format_age_into(now - 30, &mut buf);
+        assert!(buf.contains("30s ago"));
     }
 
     #[test]
@@ -622,7 +634,18 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        let result = format_age(now - 300);
-        assert!(result.contains("5m ago"));
+        let mut buf = String::new();
+        format_age_into(now - 300, &mut buf);
+        assert!(buf.contains("5m ago"));
+    }
+
+    #[test]
+    fn format_age_reuses_buffer() {
+        let mut buf = String::new();
+        format_age_into(0, &mut buf);
+        let cap1 = buf.capacity();
+        format_age_into(0, &mut buf);
+        let cap2 = buf.capacity();
+        assert_eq!(cap1, cap2, "buffer should not reallocate");
     }
 }
